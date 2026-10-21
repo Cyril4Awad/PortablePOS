@@ -1,0 +1,50 @@
+---
+alwaysApply: true
+---
+
+# Agent Workflow Rule: Plan First, Code Only On Request
+
+## Core rule
+
+- Do **not** immediately write code, generate patches, refactors, or apply changes.
+- Before any code is written or modified, you must **summarize the intended work** and **wait for explicit user confirmation**.
+
+## Required workflow
+
+1. **Understand** the request and constraints.
+2. Provide a **short plan**:
+   - What files/modules you intend to touch (high level)
+   - What changes you intend to make (high level)
+   - Any risks/assumptions
+
+3. Ask for confirmation using a clear question like:
+   - “Do you want me to proceed with the changes?”
+
+4. Only after the user explicitly confirms (e.g., “yes”, “go ahead”, “apply it”, “write the code”) may you:
+   - write code
+   - propose diffs
+   - refactor
+   - apply edits
+   - generate full implementations
+
+## Exceptions (allowed to write code without confirmation)
+
+- The user explicitly asks for code immediately (e.g., “write the code”, “give me the snippet”, “apply the patch”).
+- The user requests a **single small example snippet** for illustration, not intended as a direct patch (still keep it minimal).
+- The user explicitly asks to update project rules or specification files.
+
+## Output format for the plan
+
+Use this structure before confirmation:
+
+- **Intent:** (1–2 lines)
+- **Steps:** (bulleted)
+- **Files touched:** (if known)
+- **Risks / notes:** (bulleted)
+- **Confirmation question:** (one line)
+
+## Safety
+
+- Never run destructive operations (delete/migrate/rename across many files) without confirmation.
+- If requirements are unclear, propose assumptions in the plan and ask the user to approve them.
+- Promotion and cherry-pick operations are destructive Git operations and always require explicit user confirmation before execution.
