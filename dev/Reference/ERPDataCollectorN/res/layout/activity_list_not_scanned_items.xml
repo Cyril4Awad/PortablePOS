@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical" >
+
+            <LinearLayout
+        android:id="@+id/linearLayout7"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" 
+        android:background="#000"
+        >
+
+            <TextView
+                android:id="@+id/txtTitle"
+                android:layout_width="match_parent"
+                android:layout_height="30dp"
+                android:text="Not Scanned Items"
+                android:textAppearance="?android:attr/textAppearanceMedium" 
+                android:textColor="#fff"
+                android:background="#000" />
+
+    </LinearLayout>   
+    
+
+     
+    <ListView
+        android:id="@+id/itemsListView"
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent" >
+
+    </ListView>
+
+
+</LinearLayout>

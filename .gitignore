@@ -1,0 +1,63 @@
+# --- Visual Studio / .NET ---
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+[Dd]ebug/
+[Rr]elease/
+[Bb]in/
+[Oo]bj/
+*.cache
+*.log
+TestResults/
+packages/
+*.nupkg
+project.lock.json
+*.pubxml.user
+PublishProfiles/*.pubxml.user
+
+# WCF / IIS publish output
+**/Package/
+**/PackageTmp/
+**/AspnetCompileMerge/
+
+# --- Node / React Native ---
+# Dependencies for PortablePOS and any other JS/RN folder in this repo
+node_modules/
+**/node_modules/
+
+# --- React Native (PortablePOS) ---
+PortablePOS/npm-debug.log*
+PortablePOS/yarn-error.log*
+PortablePOS/.metro-health-check*
+PortablePOS/android/.gradle/
+PortablePOS/android/build/
+PortablePOS/android/app/build/
+PortablePOS/android/local.properties
+PortablePOS/android/.idea/
+PortablePOS/android/**/*.iml
+PortablePOS/android/.cxx/
+PortablePOS/ios/Pods/
+PortablePOS/ios/build/
+PortablePOS/ios/.xcode.env.local
+PortablePOS/**/*.jsbundle
+PortablePOS/**/fastlane/report.xml
+PortablePOS/**/fastlane/Preview.html
+PortablePOS/**/fastlane/screenshots
+PortablePOS/**/fastlane/test_output
+PortablePOS/vendor/bundle/
+
+# Local dev caches (do not version Gradle distributions under dev/)
+dev/gradle/
+dev/android-avd/
+
+# --- OS ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Signing keys (keep debug.keystore if your team relies on it locally)
+*.keystore
+!**/debug.keystore

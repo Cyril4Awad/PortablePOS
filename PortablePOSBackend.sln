@@ -1,0 +1,52 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30717.126
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "SimpleTest", "SimpleTest\SimpleTest.vbproj", "{55517047-4807-4E6E-A43F-3FC826EFDAAC}"
+EndProject
+Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "PortablePOS_CL", "StockSearch_CL\PortablePOS_CL.vbproj", "{E4F1A581-5CBD-481B-ADA8-33C109656F81}"
+EndProject
+Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "PortablePOS_WS", "StockSearch_WS\PortablePOS_WS.vbproj", "{6B6C76EC-7102-4022-84EF-5CE33DEA3BA0}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{55517047-4807-4E6E-A43F-3FC826EFDAAC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{55517047-4807-4E6E-A43F-3FC826EFDAAC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{55517047-4807-4E6E-A43F-3FC826EFDAAC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{55517047-4807-4E6E-A43F-3FC826EFDAAC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E4F1A581-5CBD-481B-ADA8-33C109656F81}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E4F1A581-5CBD-481B-ADA8-33C109656F81}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E4F1A581-5CBD-481B-ADA8-33C109656F81}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E4F1A581-5CBD-481B-ADA8-33C109656F81}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B6C76EC-7102-4022-84EF-5CE33DEA3BA0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B6C76EC-7102-4022-84EF-5CE33DEA3BA0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B6C76EC-7102-4022-84EF-5CE33DEA3BA0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B6C76EC-7102-4022-84EF-5CE33DEA3BA0}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {BD63A5D0-9942-4632-AD6E-96D2C458A1BA}
+	EndGlobalSection
+	GlobalSection(TeamFoundationVersionControl) = preSolution
+		SccNumberOfProjects = 4
+		SccEnterpriseProvider = {4CA58AB2-18FA-4F8D-95D4-32DDF27D184C}
+		SccTeamFoundationServer = http://0.0.0.0:8080/tfs/brandjouniehcollection
+		SccLocalPath0 = .
+		SccProjectUniqueName1 = SimpleTest\\SimpleTest.vbproj
+		SccProjectName1 = SimpleTest
+		SccLocalPath1 = SimpleTest
+		SccProjectUniqueName2 = StockSearch_CL\\PortablePOS_CL.vbproj
+		SccProjectName2 = StockSearch_CL
+		SccLocalPath2 = StockSearch_CL
+		SccProjectUniqueName3 = StockSearch_WS\\PortablePOS_WS.vbproj
+		SccProjectName3 = StockSearch_WS
+		SccLocalPath3 = StockSearch_WS
+	EndGlobalSection
+EndGlobal

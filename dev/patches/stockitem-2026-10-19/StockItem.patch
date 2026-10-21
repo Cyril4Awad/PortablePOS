@@ -1,0 +1,2818 @@
+diff --git a/StockItem.cs b/StockItem.cs
+index 985ca0b..5f52fef 100644
+--- a/StockItem.cs
++++ b/StockItem.cs
+@@ -49,10 +49,54 @@ namespace SuperStoreMain.Forms.Steps
+ 
+         public bool OpenedFromAnotherForm = false, DuplicateItem = false;
+ 
+         private double AvlbQty;
+ 
++        // True only while the item picked by Duplicate is being copied into the form (the "Code(s) Already Exist" check must be skipped only then)
++        private bool LoadingDuplicateSource = false;
++
++        // True while an item is being loaded into the form, so CheckedChanged handlers don't apply user rules / recalculations on stored values
++        private bool LoadingItem = false;
++
++        private string LastItemPicTempFile = "";
++
++        #endregion
++
++        #region Helpers
++
++        private static double ParseDouble(string text)
++        {
++            return double.TryParse(text?.Trim(), out double value) ? value : 0;
++        }
++
++        private Form NotificationOwner => this.ParentForm ?? (Form)this;
++
++        // Same date format ClsPricing passes to ClsCom.GetRate
++        private static string RateDate => DateTime.Today.ToString("dd/MM/yyyy");
++
++        private static void ClearAndDispose(Control.ControlCollection controls)
++        {
++            List<Control> oldControls = controls.Cast<Control>().ToList();
++            controls.Clear();
++            foreach (Control control in oldControls) { control.Dispose(); }
++        }
++
++        // These fields have AutoClearEnabled = false in the designer, so AutoClearControls leaves the previous item's values in them
++        private void ClearNonAutoClearFields()
++        {
++            txtBBFDate.Text = "";
++            txtBBFQty.Text = "";
++            txtAvailableQty.Text = "";
++            txtQtyToReturn.Text = "";
++            txtLDatePhyCnt.Text = "";
++            txtPotChangeDate.Text = "";
++            txtUserCode.Text = "";
++            txtDiscPrice2.Text = "";
++            txtDiscPrice3.Text = "";
++            AvlbQty = 0;
++        }
++
+         #endregion
+ 
+ 
+         #region Step Load / Close
+ 
+@@ -182,16 +226,23 @@ namespace SuperStoreMain.Forms.Steps
+                 if (OpenedFromAnotherForm)
+                 {
+                     btnAddModifyDelete_Click(btnModify, new EventArgs());
+                     pnlKey.Enabled = false;
+                     StockItemsController controller = new StockItemsController();
+-                    StockItems item = new StockItems();
+-                    item = controller.GetStockItems(StockIDfromOtherForm);
++                    StockItems item = controller.GetStockItems(StockIDfromOtherForm);
++                    if (item == null)
++                    {
++                        ClsCommon.ShowNotification(NotificationOwner, "Item Not Found");
++                        return;
++                    }
+                     cntCategory.txtCode.Text = item.Stk_Category;
+                     cntSupplier.txtCode.Text = item.Stk_Supplier;
+                     txtSerialNo.Text = item.Stk_Serial;
+                     ActiveControl = txtDesc;
++
++                    // Focus never leaves the key fields here, so their Validating (which loads the item) would not fire
++                    Supp_Cat_Ser_Validating(txtSerialNo, new CancelEventArgs());
+                 }
+ 
+                 //Add logging
+             }
+             catch (Exception ex)
+@@ -203,11 +254,14 @@ namespace SuperStoreMain.Forms.Steps
+         private void InitForm()
+         {
+             try
+             {
+ 
++                lcFormMode = ClsCommon.FormMode.None;
++
+                 ClsCommon.AutoClearControls(this);
++                ClearNonAutoClearFields();
+                 ManageUserControls();
+                 LoadQuantityDetailsGrid(-1);
+ 
+                 btnAdd.Enabled = lcPrivAdd;
+                 btnModify.Enabled = lcPrivModify;
+@@ -251,13 +305,13 @@ namespace SuperStoreMain.Forms.Steps
+ 
+         private void ManageUserControls()
+         {
+             try
+             {
+-                FpnlSuppRef.Controls.Clear();
++                ClearAndDispose(FpnlSuppRef.Controls);
+ 
+-                flpStockUnits.Controls.Clear();
++                ClearAndDispose(flpStockUnits.Controls);
+                 if (lcFormMode != ClsCommon.FormMode.Modify)
+                 {
+                     AddEmptyUnitRecord();
+                 }
+                 txtUnitsLogging.Text = "";
+@@ -297,10 +351,11 @@ namespace SuperStoreMain.Forms.Steps
+             }
+         }
+ 
+         private void FrmStockItems_FormClosing(object sender, FormClosingEventArgs e)
+         {
++            AutoValidate previousAutoValidate = this.AutoValidate;
+             try
+             {
+                 this.AutoValidate = AutoValidate.Disable;
+ 
+                 if (!OpenedFromAnotherForm)
+@@ -311,10 +366,14 @@ namespace SuperStoreMain.Forms.Steps
+                     {
+                         e.Cancel = true;
+                     }
+                 }
+ 
++                // The form stays open: give validation back, otherwise it stays off for the rest of the session
++                if (e.Cancel) { this.AutoValidate = previousAutoValidate; }
++                else if (LastItemPicTempFile != "") { try { File.Delete(LastItemPicTempFile); } catch (Exception) { } }
++
+             }
+             catch (Exception ex)
+             {
+                 ClsCommon.ShowException(StepName, ex);
+             }
+@@ -334,11 +393,17 @@ namespace SuperStoreMain.Forms.Steps
+                 SuspendLayout();
+ 
+                 if (lcFormMode != ClsCommon.FormMode.Add)
+                 {
+                     ClsCommon.AutoClearControls(tabForm);
++                    ClearNonAutoClearFields();
+                     ManageUserControls();
++
++                    // The keys no longer point to the loaded item: forget it, so Save / Delete / reports can't act on it
++                    StockID = 0;
++                    clsDynamicFields.intEntity = StockID;
++
+                     LoadQuantityDetailsGrid(-1);
+                 }
+             }
+             catch (Exception ex)
+             {
+@@ -369,15 +434,18 @@ namespace SuperStoreMain.Forms.Steps
+                 StockItems clsStockItems = new StockItems();
+                 clsStockItems = controller.GetStockItems(0, cntSupplier.Code, cntCategory.Code, txtSerialNo.Text);
+ 
+                 
+ 
++                // Copying from an existing item is allowed only for the item picked through the Duplicate button
++                bool DuplicateItem = this.DuplicateItem && LoadingDuplicateSource;
++
+                 if (clsStockItems == null)
+                 {
+                     if (lcFormMode != ClsCommon.FormMode.Add)
+                     {
+-                        ClsCommon.ShowNotification(this.ParentForm, "Invalid Code(s)");
++                        ClsCommon.ShowNotification(NotificationOwner, "Invalid Code(s)");
+                         e.Cancel = true;
+                     }
+                     else
+                     {
+                         lastKeysCombination = (cntSupplier.Code + "|" + cntCategory.Code + "|" + txtSerialNo.Text)?.ToUpper();
+@@ -391,13 +459,18 @@ namespace SuperStoreMain.Forms.Steps
+                         ClsCommon.ShowNotification(this, "Code(s) Already Exist");
+                         e.Cancel = true;
+                     }
+                     else
+                     {
++                        LoadingItem = true;
++
+                         //Used in saved is allowed to see if it was Y or N
+                         ThirdParty = clsStockItems.Stk_3rdParty;
+ 
++                        // Set before chkActive: its CheckedChanged blocks deactivation based on AvlbQty
++                        AvlbQty = DuplicateItem ? 0 : Convert.ToDouble(clsStockItems.Stk_AvlbQty1 ?? 0);
++
+                         lastKeysCombination = (cntSupplier.Code + "|" + cntCategory.Code + "|" + txtSerialNo.Text)?.ToUpper();
+                         stBar.lblUserCode.Text = clsStockItems.Stk_Ustmp;
+                         stBar.lblDateTime.Text = clsStockItems.Stk_Dstmp?.ToString("dd/MM/yyyy hh:mm:ss tt") ?? "Not Defined";
+                         chkActive.Checked = clsStockItems.Stk_Status == "A";
+                         if (DuplicateItem) txtSerialNo.Text = "";
+@@ -419,11 +492,10 @@ namespace SuperStoreMain.Forms.Steps
+                                 rbItmServiceS.Checked = true;
+                                 break;
+                             default:
+                                 break;
+                         }
+-                        if (!string.IsNullOrEmpty(clsStockItems.Stk_Brand)) cntBrand.Code = clsStockItems.Stk_Brand;
+                         if (!string.IsNullOrEmpty(clsStockItems.Stk_GoodsLoc)) cntGoodsLoc.Code = clsStockItems.Stk_GoodsLoc;
+                         if (clsStockItems.Stk_ValidityDays != (int?)null) txtValidityDays.NumericText = clsStockItems.Stk_ValidityDays;
+                         //Flags
+                         if (clsStockItems.Stk_Gift == "C") { rbBaseCurrencyCC.Checked = true; rbBaseCurrencyLC.Checked = false; } else { rbBaseCurrencyLC.Checked = true; rbBaseCurrencyCC.Checked = false; };
+                         chkAssembly.Checked = clsStockItems.Stk_Assembly == "Y";
+@@ -441,12 +513,17 @@ namespace SuperStoreMain.Forms.Steps
+                         chkOnlineItem.Checked = StockOnlineController.StockOnlineExists(clsStockItems.Stk_StkId);
+ 
+                         ////BARCODES
+                         if (!string.IsNullOrEmpty(clsStockItems.Stk_Barcode1) && !DuplicateItem) cntBarcode1.txtBarcode1.Text = clsStockItems.Stk_Barcode1;
+                         if (!string.IsNullOrEmpty(clsStockItems.Stk_Barcode2) && !DuplicateItem) cntBarcode2.txtBarcode1.Text = clsStockItems.Stk_Barcode2;
+-                        if (!string.IsNullOrEmpty(clsStockItems.Stk_AddOnRef)) txtAddonRef.Text = clsStockItems.Stk_AddOnRef;
+-                        if (clsStockItems.Stk_PLUnbr != (double?)null) txtPLU.Text = clsStockItems.Stk_PLUnbr.ToString();
++                        // Stored values: Barcode_Validating skips the DB check only while the barcode is unchanged
++                        cntBarcode1.txtBarcode1.LastText = cntBarcode1.txtBarcode1.Text;
++                        cntBarcode2.txtBarcode1.LastText = cntBarcode2.txtBarcode1.Text;
++
++                        // AddOnRef and PLU must be unique: not copied to a duplicated item
++                        if (!string.IsNullOrEmpty(clsStockItems.Stk_AddOnRef) && !DuplicateItem) txtAddonRef.Text = clsStockItems.Stk_AddOnRef;
++                        if (clsStockItems.Stk_PLUnbr != (double?)null && !DuplicateItem) txtPLU.Text = clsStockItems.Stk_PLUnbr.ToString();
+ 
+                         ////Quantity
+                         //SUM of WH Qty Details Record table 
+ 
+                         ////Cost /Price
+@@ -545,20 +622,37 @@ namespace SuperStoreMain.Forms.Steps
+                         if (!string.IsNullOrEmpty(clsStockItems.Stk_UserCoef)) txtUserCode.Text = clsStockItems.Stk_UserCoef;
+                         if (clsStockItems.Stk_DiscWh != null) txtDiscWH.NumericText = clsStockItems.Stk_DiscWh;
+                         if (clsStockItems.Stk_DiscRetail != null) txtDiscRetail.NumericText = clsStockItems.Stk_DiscRetail;
+                         if (clsStockItems.stk_potchangeDate != null) txtPotChangeDate.Text = clsStockItems.stk_potchangeDate.ToString();
+ 
+-                        if (clsStockItems.Stk_BBFDate1 != null)  txtBBFDate.Text = clsStockItems.Stk_BBFDate1.ToString() ;
+-                        if (clsStockItems.Stk_BBFQty1 != null) txtBBFQty.Text = clsStockItems.Stk_BBFQty1.ToString();
+-                        if (clsStockItems.Stk_AvlbQty1 != null)  txtAvailableQty.Text = clsStockItems.Stk_AvlbQty1.ToString();
+-                        if (clsStockItems.Stk_Return1 != null)  txtQtyToReturn.Text = clsStockItems.Stk_Return1.ToString(); 
++                        // Stock quantities / dates belong to the source item only (display only: SaveData takes them from the DB)
++                        if (!DuplicateItem)
++                        {
++                            if (clsStockItems.Stk_BBFDate1 != null) txtBBFDate.Text = clsStockItems.Stk_BBFDate1.ToString();
++                            if (clsStockItems.Stk_BBFQty1 != null) txtBBFQty.NumericText = clsStockItems.Stk_BBFQty1;
++                            if (clsStockItems.Stk_AvlbQty1 != null) txtAvailableQty.NumericText = clsStockItems.Stk_AvlbQty1;
++                            if (clsStockItems.Stk_Return1 != null) txtQtyToReturn.NumericText = clsStockItems.Stk_Return1;
++                            if (clsStockItems.Stk_LDateCount != null) txtLDatePhyCnt.Text = clsStockItems.Stk_LDateCount.ToString();
++                        }
+ 
+                         ////File price
+                         if (clsStockItems.stk_FilePrice != null && clsStockItems.stk_FilePrice.Sfp_stkId != null)
+                         {
+                             //Potential Cost
+-                            if (clsStockItems.stk_FilePrice.Sfp_PotCurr != null) { rbLC.Checked = clsStockItems.stk_FilePrice.Sfp_PotCurr == ClsConfig.gbCurr1; }// rbCC.Checked = clsStockItems.stk_FilePrice.Sfp_PotCurr != ClsConfig.gbCurr1; };
++                            if (clsStockItems.stk_FilePrice.Sfp_PotCurr != null)
++                            {
++                                // Setting rbLC.Checked = false alone left neither radio checked
++                                if (clsStockItems.stk_FilePrice.Sfp_PotCurr == ClsConfig.gbCurr1)
++                                {
++                                    rbLC.Checked = true;
++                                }
++                                else
++                                {
++                                    rbCC.Text = clsStockItems.stk_FilePrice.Sfp_PotCurr; // saved back as Sfp_PotCurr
++                                    rbCC.Checked = true;
++                                }
++                            }
+                             if (clsStockItems.stk_FilePrice.Sfp_PotUnitPrice != null) txtUnitPrice.NumericText = clsStockItems.stk_FilePrice.Sfp_PotUnitPrice;
+                             if (clsStockItems.stk_FilePrice.Sfp_PotItemDiscount != null) txtUnitDiscPotCost.NumericText = clsStockItems.stk_FilePrice.Sfp_PotItemDiscount;
+                             if (clsStockItems.stk_FilePrice.Sfp_PotInvDiscount != null) txtAddInvDisc.NumericText = clsStockItems.stk_FilePrice.Sfp_PotInvDiscount;
+                             if (clsStockItems.stk_FilePrice.Sfp_PotPurQty != null) txtPurchaseQty.NumericText = clsStockItems.stk_FilePrice.Sfp_PotPurQty;
+                             if (clsStockItems.stk_FilePrice.Sfp_PotPromQty != null) txtPromotionQty.NumericText = clsStockItems.stk_FilePrice.Sfp_PotPromQty;
+@@ -640,16 +734,20 @@ namespace SuperStoreMain.Forms.Steps
+                                 cntRef.Size = new Size(750, 20);
+                                 cntRef.cntSuppliers1.Code = Ref.Ads_Supplier;
+                                 cntRef.chkReorder.Checked = Ref.Ads_AllowReOrder == "Y";
+                                 if (!string.IsNullOrEmpty(Ref.Ads_SuppRef)) cntRef.txtReference.Text = Ref.Ads_SuppRef;
+                                 FpnlSuppRef.Controls.Add(cntRef);
++
++                                // Same duplicate checks as the rows added with btnAddSuppRef
++                                cntRef.cntSuppliers1.txtCode.Validating += new CancelEventHandler(this.txtSuppRef_Validating);
++                                cntRef.txtReference.Validating += new CancelEventHandler(this.txtReference_Validating);
+                             }
+ 
+                         }
+ 
+                         ////Stock Unit
+-                        flpStockUnits.Controls.Clear();
++                        ClearAndDispose(flpStockUnits.Controls);
+                         if (clsStockItems.stk_StockUnitList != null && clsStockItems.stk_StockUnitList.Count > 0)
+                         {
+ 
+                             foreach (StockUnit SU in clsStockItems.stk_StockUnitList)
+                             {
+@@ -719,11 +817,12 @@ namespace SuperStoreMain.Forms.Steps
+                                 if (SU.SUnit_Volume != null) CntStkUnt.txtVolume.NumericText = SU.SUnit_Volume;
+                                 if (SU.SUnit_Weight != null) CntStkUnt.txtWeight.NumericText = SU.SUnit_Weight;
+ 
+                                 CntStkUnt.chkActiveUnit.Checked = SU.SUnit_Active == "Y";
+ 
+-                                foreach (BarcodeSyn BarCodeSyn in SU.Stk_BarcodeList)
++                                // Synonym barcodes must stay unique: not copied to a duplicated item
++                                foreach (BarcodeSyn BarCodeSyn in (DuplicateItem ? null : SU.Stk_BarcodeList) ?? new List<BarcodeSyn>())
+                                 {
+ 
+                                     if (BarCodeSyn.BSy_UnitCode == SU.SUnit_Unit)
+                                     {
+                                         cntBarcode CntBarcode = new cntBarcode();
+@@ -784,12 +883,10 @@ namespace SuperStoreMain.Forms.Steps
+                             }
+                             else
+                             {
+                                 cntDepGrpSub.cntDepartment.Code = "";
+                             }
+-
+-                            AvlbQty = Convert.ToDouble(clsStockItems.Stk_AvlbQty1);
+                         }
+                         if (!DuplicateItem)
+                         {
+                             LoadQuantityDetailsGrid(StockID);
+                             clsDynamicFields.intEntity = StockID;
+@@ -804,10 +901,14 @@ namespace SuperStoreMain.Forms.Steps
+             }
+             catch (Exception ex)
+             {
+                 ClsCommon.ShowException(StepName, ex);
+             }
++            finally
++            {
++                LoadingItem = false;
++            }
+ 
+         }
+ 
+         #endregion
+ 
+@@ -818,13 +919,19 @@ namespace SuperStoreMain.Forms.Steps
+         {
+             try
+             {
+ 
+                 ClsCommon.AutoClearControls(this);
++                ClearNonAutoClearFields();
+                 ManageUserControls();
+                 LoadQuantityDetailsGrid(-1);
+ 
++                StockID = 0;
++                DuplicateItem = false;
++                cntBarcode1.txtBarcode1.LastText = "";
++                cntBarcode2.txtBarcode1.LastText = "";
++
+                 stBar.lblMode.Text = ((WinApplications.Controls.ButtonMain)sender).Text;
+ 
+                 if (sender == btnAdd)
+                 {
+                     lcFormMode = ClsCommon.FormMode.Add;
+@@ -834,16 +941,20 @@ namespace SuperStoreMain.Forms.Steps
+                     chkSubjectVAT.Enabled = true;
+                     ClsCommon.MakeReadOnly(this.CostPriceTab, false, txtBBFCostLC, txtBBFCostCC, txtBBFCostFC,
+                         txtActCostLC, txtActCostCC, txtActCostFC, txtLastCostLC, txtLastCostCC, txtLastCostFC,
+                         txtPotCostLC, txtPotCostCC, txtPotCostFC);
+                     ClsCommon.MakeReadOnly(this.StockFilePriceTab, false);
++                    // Modify makes these read-only / disabled: give them back, otherwise Add after Modify keeps them locked
++                    ClsCommon.MakeReadOnly(this.OHInfoTab, false);
++                    PnlVatType.Enabled = PnlVatStatus.Enabled = cntVat1.Enabled = chkSubjectVAT.Checked;
++                    txtPrice2LL.ReadOnly = txtPrice2CC.ReadOnly = txtPrice3LL.ReadOnly = txtPrice3CC.ReadOnly = false;
+                     //ClsCommon.MakeReadOnly(this.YTDTab, true);
+                     chkFollow.Checked = true;
+ 
+-                    chkUseItmDisc.Checked = ClsConfig.locationDirectives.Ld_UseItemDiscount.ToUpper() == "Y" ;
+-                    chkUsePromQty.Checked = ClsConfig.locationDirectives.Ld_UsePromotionQuantity.ToUpper() == "Y" ;
+-                    chkUseInvDisc.Checked = ClsConfig.locationDirectives.Ld_UseInvoiceDiscount.ToUpper() == "Y";
++                    chkUseItmDisc.Checked = ClsConfig.locationDirectives.Ld_UseItemDiscount?.ToUpper() == "Y" ;
++                    chkUsePromQty.Checked = ClsConfig.locationDirectives.Ld_UsePromotionQuantity?.ToUpper() == "Y" ;
++                    chkUseInvDisc.Checked = ClsConfig.locationDirectives.Ld_UseInvoiceDiscount?.ToUpper() == "Y";
+ 
+                     chkConsignmentItem.Checked = false;
+ 
+                     txtPrice1LL.Enabled = txtPrice1CC.Enabled =
+                         txtPrice2CC.Enabled = txtPrice2LL.Enabled =
+@@ -912,10 +1023,12 @@ namespace SuperStoreMain.Forms.Steps
+                 btnDuplicate.Visible = lcFormMode == ClsCommon.FormMode.Add;
+ 
+                 dteCrDate.Value = DateTime.Today.Date;
+                 btnGenSerial.Visible = lcFormMode == ClsCommon.FormMode.Add;
+ 
++                SetQuantityDetailsGridEditable();
++
+                 ActiveControl = cntSupplier.txtCode;
+ 
+             }
+             catch (Exception ex)
+             {
+@@ -975,23 +1088,33 @@ namespace SuperStoreMain.Forms.Steps
+                         {
+                             cntSupplier.Code = ((DataRowView)objReturn)["StockHiddenStk_Supplier"].ToString();
+                             cntCategory.Code = ((DataRowView)objReturn)["StockHiddenStk_Category"].ToString();
+                             txtSerialNo.Text = ((DataRowView)objReturn)["StockHiddenSerial_No"].ToString();
+ 
++                            LoadingDuplicateSource = DuplicateItem;
+                             Supp_Cat_Ser_Validating(txtSerialNo, new CancelEventArgs());
+ 
+                         }
+ 
+                     }
+ 
+                 }
++                else if (lcFormMode == ClsCommon.FormMode.Add)
++                {
++                    // Duplicate cancelled: back to a normal Add, so the "Code(s) Already Exist" check applies again
++                    DuplicateItem = false;
++                }
+ 
+             }
+             catch (Exception ex)
+             {
+                 ClsCommon.ShowException(StepName, ex);
+             }
++            finally
++            {
++                LoadingDuplicateSource = false;
++            }
+         }
+ 
+         private void btnSave_Click(object sender, EventArgs e)
+         {
+             try
+@@ -1103,11 +1226,11 @@ namespace SuperStoreMain.Forms.Steps
+ 
+         private void btnGeneratePLU_Click(object sender, EventArgs e)
+         {
+             try
+             {
+-                if (!string.IsNullOrEmpty(txtPLU.Text) && Convert.ToDouble(txtPLU.Text) != 0) { return; }
++                if (ParseDouble(txtPLU.Text) != 0) { return; }
+ 
+                 txtPLU.Text = StockItemsController.GeneratePLU().ToString();
+             }
+             catch (Exception ex)
+             {
+@@ -1122,11 +1245,12 @@ namespace SuperStoreMain.Forms.Steps
+ 
+         private void chkActive_CheckedChanged(object sender, EventArgs e)
+         {
+             try
+             {
+-                if (lcFormMode == ClsCommon.FormMode.Modify && !chkActive.Checked && AvlbQty > 0)
++                // Not while loading: the stored status is displayed as it is
++                if (!LoadingItem && lcFormMode == ClsCommon.FormMode.Modify && !chkActive.Checked && AvlbQty > 0)
+                 {
+                     chkActive.Checked = true;
+                     ClsCommon.ShowNotification(this, "Cannot Deactivate An Item With Available Quantity!");
+                 }
+             }
+@@ -1187,16 +1311,15 @@ namespace SuperStoreMain.Forms.Steps
+                             }
+                         }
+                     }
+                 };
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+-         
++
+         }
+ 
+         private void chkDefaultPIUnit_CheckedChanged(object sender, EventArgs e)
+         {
+             try
+@@ -1214,35 +1337,34 @@ namespace SuperStoreMain.Forms.Steps
+                             }
+                         }
+                     }
+                 };
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+            
+         }
+ 
+         private void txtReference_Validating(object sender, CancelEventArgs e)
+         {
+             try
+             {
+                 var senderTextBox = (TextBox)sender;
+-                string senderText = senderTextBox.Text;
++                string senderText = senderTextBox.Text?.Trim();
+ 
+                 if (string.IsNullOrEmpty(senderText))
+                     return;
+ 
+-                foreach (cntSupplierReference cnt in FpnlSuppRef.Controls)
++                foreach (cntSupplierReference cnt in FpnlSuppRef.Controls.OfType<cntSupplierReference>())
+                 {
+-                    if (cnt.txtReference == sender) continue;
++                    if (cnt.txtReference == sender || cnt.Delete) continue;
+ 
+                     if (!string.IsNullOrEmpty(cnt.cntSuppliers1.Code) &&
+                         !string.IsNullOrEmpty(cnt.txtReference.Text) &&
+-                        cnt.txtReference.Text == senderText)
++                        string.Equals(cnt.txtReference.Text.Trim(), senderText, StringComparison.OrdinalIgnoreCase))
+                     {
+                         ClsCommon.ShowNotification(this, "Duplicate Reference.");
+                         e.Cancel = true;
+                         return;
+                     }
+@@ -1264,21 +1386,22 @@ namespace SuperStoreMain.Forms.Steps
+                 if (string.IsNullOrEmpty(currentCode))
+                     return;             
+ 
+                 List<string> supplierCodes = FpnlSuppRef.Controls
+                     .OfType<cntSupplierReference>()
++                    .Where(c => !c.Delete)
+                     .Select(c => c.cntSuppliers1.Code)
+                     .Where(code => !string.IsNullOrWhiteSpace(code))
+                     .ToList();
+ 
+                 bool isDuplicate = supplierCodes.Count(code => string.Equals(code, currentCode, StringComparison.OrdinalIgnoreCase)) > 1;
+ 
+                 if (isDuplicate)
+                 {
+                     currentTextBox.Text = string.Empty;
+                     e.Cancel = true;
+-                    MessageBox.Show($"This supplier code already exists.");
++                    ClsCommon.ShowNotification(NotificationOwner, "This Supplier Code Already Exists.");
+                     
+                 }
+ 
+             }
+             catch (Exception ex)
+@@ -1288,18 +1411,18 @@ namespace SuperStoreMain.Forms.Steps
+         }
+ 
+         private void chkActiveUnit_CheckedChanged(object sender, EventArgs e)
+         {
+ 
+-            CheckBox chkActive = sender as CheckBox;
+-            cntStockUnit cntStockUnit = chkActive.Parent as cntStockUnit;
++            CheckBox chkActiveUnit = sender as CheckBox;
++            cntStockUnit cntStockUnit = chkActiveUnit?.Parent as cntStockUnit;
+ 
+-            if (cntStockUnit != null && chkActive == cntStockUnit.chkActiveUnit)
++            if (cntStockUnit != null && chkActiveUnit == cntStockUnit.chkActiveUnit)
+             {
+-                if (cntStockUnit.chkBaseUnit.Checked && !chkActive.Checked)
++                if (cntStockUnit.chkBaseUnit.Checked && !chkActiveUnit.Checked)
+                 {
+-                    chkActive.Checked = true;
++                    chkActiveUnit.Checked = true;
+                 }
+             }
+         }
+ 
+         private bool CheckChecked(string checkBoxName)
+@@ -1309,18 +1432,15 @@ namespace SuperStoreMain.Forms.Steps
+                 switch (checkBoxName)
+                 {
+                     case "chkBaseUnit":
+                         return (Array.FindAll(flpStockUnits.Controls.Cast<Control>().OfType<cntStockUnit>().ToArray(),
+                                 cnt => !cnt.Delete && cnt.chkBaseUnit.Checked).Length > 1);
+-                        break;
+                     case "chkDefaultPIUnit":
+                         return (Array.FindAll(flpStockUnits.Controls.Cast<Control>().OfType<cntStockUnit>().ToArray(),
+                                 cnt => !cnt.Delete && cnt.chkDefaultPIUnit.Checked).Length > 1);
+-                        break;
+                     default:
+                         return false;
+-                        break;
+                 }
+ 
+             }
+             catch (Exception)
+             {
+@@ -1384,48 +1504,59 @@ namespace SuperStoreMain.Forms.Steps
+                         ClsCommon.ShowNotification(this, "Invalid Value Please select from options 1,2,3.");
+                         e.Cancel = true;
+                         return;
+                     }
+ 
+-
+-                    string Price1LL, Price2LL, Price3LL, Price1CC, Price2CC, Price3CC = "";
+-                    Price1LL = txtPrice1LL.Text;
+-                    Price2LL = txtPrice2LL.Text;
+-                    Price3LL = txtPrice3LL.Text;
+-                    Price1CC = txtPrice1CC.Text;
+-                    Price2CC = txtPrice2CC.Text;
+-                    Price3CC = txtPrice3CC.Text;
+-
+-                    ClsPricing.CalculatePriceFromPotCost(rbBaseCurrencyLC.Checked ? Convert.ToDouble(txtPotCostLC.Text) : Convert.ToDouble(txtPotCostCC.Text),
+-                                                        txtSalesCoefVal.Text,
+-                                                        chkSubjectVAT.Checked, cntVat1.VatPerc,
+-                                                        txtDiscPrice2.Text, txtDiscPrice3.Text,
+-                                                        cntFCCode.Code, rbBaseCurrencyLC.Checked, rbBaseCurrencyCC.Checked,
+-                                                        ref Price1LL, ref Price2LL, ref Price3LL, ref Price1CC, ref Price2CC, ref Price3CC,
+-                                                        "");
+-
+-                    txtPrice1LL.Text = Price1LL;
+-                    txtPrice2LL.Text = Price2LL;
+-                    txtPrice3LL.Text = Price3LL;
+-                    txtPrice1CC.Text = Price1CC;
+-                    txtPrice2CC.Text = Price2CC;
+-                    txtPrice3CC.Text = Price3CC;
+-
+-                    CalculatePriceForUnit();
++                    RecalculatePricesFromPotCost();
+                 }
+             }
+             catch (Exception ex)
+             {
+ 
+                 ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
++        // VAT changes re-price the item from its potential cost. Only in Add, like CalculatePotentialCost:
++        // in Modify the prices are disabled, so this used to change them silently (e.g. leaving the VAT code field)
++        private void RecalculatePricesFromPotCost()
++        {
++            if (lcFormMode != ClsCommon.FormMode.Add) { return; }
++
++            string Price1LL, Price2LL, Price3LL, Price1CC, Price2CC, Price3CC;
++            Price1LL = txtPrice1LL.Text;
++            Price2LL = txtPrice2LL.Text;
++            Price3LL = txtPrice3LL.Text;
++            Price1CC = txtPrice1CC.Text;
++            Price2CC = txtPrice2CC.Text;
++            Price3CC = txtPrice3CC.Text;
++
++            ClsPricing.CalculatePriceFromPotCost(ParseDouble(rbBaseCurrencyLC.Checked ? txtPotCostLC.Text : txtPotCostCC.Text),
++                                                txtSalesCoefVal.Text,
++                                                chkSubjectVAT.Checked, cntVat1.VatPerc,
++                                                txtDiscPrice2.Text, txtDiscPrice3.Text,
++                                                cntFCCode.Code, rbBaseCurrencyLC.Checked, rbBaseCurrencyCC.Checked,
++                                                ref Price1LL, ref Price2LL, ref Price3LL, ref Price1CC, ref Price2CC, ref Price3CC,
++                                                "");
++
++            txtPrice1LL.Text = Price1LL;
++            txtPrice2LL.Text = Price2LL;
++            txtPrice3LL.Text = Price3LL;
++            txtPrice1CC.Text = Price1CC;
++            txtPrice2CC.Text = Price2CC;
++            txtPrice3CC.Text = Price3CC;
++
++            CalculatePriceForUnit();
++        }
++
+         private void rbVATTypeE_CheckedChanged(object sender, EventArgs e)
+         {
+             try
+             {
++                // While loading, show the stored VAT type as it is (this used to clear Subject VAT on load)
++                if (LoadingItem) { return; }
++
+                 if (rbVATTypeN.Checked == false)
+                 {
+                     chkSubjectVAT.Checked = false;
+                     rbVATTypeE.Checked = true;
+                 }
+@@ -1474,10 +1605,20 @@ namespace SuperStoreMain.Forms.Steps
+ 
+         private void chkSubjectVAT_CheckedChanged(object sender, EventArgs e)
+         {
+             try
+             {
++                // While loading, only enable / disable: the stored VAT type, code and status are loaded right after
++                // (Modify keeps the VAT panels disabled, as set by btnModify)
++                if (LoadingItem)
++                {
++                    cntVat1.Enabled = chkSubjectVAT.Checked;
++                    PnlVatType.Enabled = PnlVatStatus.Enabled = lcFormMode == ClsCommon.FormMode.Add && chkSubjectVAT.Checked;
++                    rbVATStatus0.Enabled = !chkSubjectVAT.Checked;
++                    return;
++                }
++
+                 if (chkSubjectVAT.Checked)
+                 {
+                     cntVat1.Enabled = true;
+                     PnlVatType.Enabled = true;
+                     PnlVatStatus.Enabled = true;
+@@ -1502,40 +1643,16 @@ namespace SuperStoreMain.Forms.Steps
+                     rbVATStatus0.Enabled = true;
+                     rbVATStatus0.Checked = true;
+                     PnlVatStatus.Enabled = false;
+                 }
+ 
+-                string Price1LL, Price2LL, Price3LL, Price1CC, Price2CC, Price3CC = "";
+-                Price1LL = txtPrice1LL.Text;
+-                Price2LL = txtPrice2LL.Text;
+-                Price3LL = txtPrice3LL.Text;
+-                Price1CC = txtPrice1CC.Text;
+-                Price2CC = txtPrice2CC.Text;
+-                Price3CC = txtPrice3CC.Text;
+-
+-                ClsPricing.CalculatePriceFromPotCost(rbBaseCurrencyLC.Checked ? Convert.ToDouble(txtPotCostLC.Text) : Convert.ToDouble(txtPotCostCC.Text),
+-                                                    txtSalesCoefVal.Text,
+-                                                    chkSubjectVAT.Checked, cntVat1.VatPerc,
+-                                                    txtDiscPrice2.Text, txtDiscPrice3.Text,
+-                                                    cntFCCode.Code, rbBaseCurrencyLC.Checked, rbBaseCurrencyCC.Checked,
+-                                                    ref Price1LL, ref Price2LL, ref Price3LL, ref Price1CC, ref Price2CC, ref Price3CC,
+-                                                    "");
+-
+-                txtPrice1LL.Text = Price1LL;
+-                txtPrice2LL.Text = Price2LL;
+-                txtPrice3LL.Text = Price3LL;
+-                txtPrice1CC.Text = Price1CC;
+-                txtPrice2CC.Text = Price2CC;
+-                txtPrice3CC.Text = Price3CC;
+-
+-                CalculatePriceForUnit();
++                RecalculatePricesFromPotCost();
+ 
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
+         //private void StsCoefValC_CheckedChanged(object sender, EventArgs e)
+         //{
+@@ -1569,11 +1686,11 @@ namespace SuperStoreMain.Forms.Steps
+                 if (string.IsNullOrEmpty(senderText))
+                     return;
+ 
+                 if (StockItemsController.GetAddOnRef(senderText, lcFormMode == ClsCommon.FormMode.Modify ? $"and stk_stkid <> {StockID}" : ""))
+                 {
+-                    ClsCommon.ShowNotification(this.ParentForm, "AddOnRef Already Exists!");
++                    ClsCommon.ShowNotification(NotificationOwner, "AddOnRef Already Exists!");
+                     e.Cancel = true;
+                     return;
+                 }
+             }
+             catch (Exception ex)
+@@ -1605,17 +1722,17 @@ namespace SuperStoreMain.Forms.Steps
+         {
+             try
+             {
+                 if (txtPLU.Text.Any(c => !char.IsDigit(c)))
+                 {
+-                    ClsCommon.ShowNotification(this.ParentForm, "PLU # Accepts Only Digits!");
++                    ClsCommon.ShowNotification(NotificationOwner, "PLU # Accepts Only Digits!");
+                     return false;
+ 
+                 }
+                 if (Convert.ToDouble(txtPLU.Text) != 0 && StockItemsController.GetPLU(txtPLU.Text, lcFormMode == ClsCommon.FormMode.Modify ? $"and stk_stkid <> {StockID}" : ""))
+                 {
+-                    ClsCommon.ShowNotification(this.ParentForm, "PLU # Already Exists!");
++                    ClsCommon.ShowNotification(NotificationOwner, "PLU # Already Exists!");
+                     return false;
+                 }                
+                 return true;
+             }
+             catch (Exception ex)
+@@ -1628,52 +1745,48 @@ namespace SuperStoreMain.Forms.Steps
+         }
+         private void CostCalculation_Validating(object sender, CancelEventArgs e)
+         {
+             try
+             {
+-                if (sender == cntFCCode)
++                // Wired on cntFCCode (designer) and on cntFCCode.txtCode (FrmStock_Load)
++                if (sender == cntFCCode || sender == cntFCCode.txtCode)
+                 {
+-                    rbCC.Text = cntFCCode.Code;                
++                    rbCC.Text = cntFCCode.Code;
+                 }
+ 
+-                if (sender is TextBox textBox)
++                if (sender is TextBox textBox && textBox != txtUnitPrice && textBox != cntFCCode.txtCode)
+                 {
++                    // Was "N" (2 decimals) whatever the field's decimals: 3-4 decimal quantities / coefficients were rounded
+                     if (!string.IsNullOrWhiteSpace(textBox.Text) && double.TryParse(textBox.Text.Trim(), out double result) && lcFormMode != ClsCommon.FormMode.Modify)
+                     {
+-                        if (textBox == txtUnitPrice)
+-                        {
+-                            textBox.Text = result.ToString("N3");
+-                        }
+-                        else
+-                        {
+-                            textBox.Text = result.ToString("N");
+-                        }
++                        textBox.Text = result.ToString("N" + Math.Max(textBox.Iscale, 0));
+                     }
+                 }
+ 
+-                if (sender == txtUnitPrice)
++                if (sender == txtUnitPrice && !string.IsNullOrWhiteSpace(txtUnitPrice.Text))
+                 {
+                     if (rbLC.Checked)
+                     {
+-                        txtUnitPrice.Text = Convert.ToDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostLCFormat);
++                        txtUnitPrice.Text = ParseDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostLCFormat);
+                     }
+                     else if(rbCC.Checked && rbCC.Text == ClsConfig.gbCurr2)
+                     {
+-                        txtUnitPrice.Text = Convert.ToDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
+-                    }                    
++                        txtUnitPrice.Text = ParseDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
++                    }
+                     else
+                     {
+-                        txtUnitPrice.Text = Convert.ToDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
++                        txtUnitPrice.Text = ParseDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
+                     }
+ 
+                     string Op = "";
+-                    double rate = 0;
+-                    ClsCom.GetRate(cntFCCode.Code, DateTime.Today.ToString(), "LC", ref Op, ref rate, ClsConfig.locationDirectives.Ld_POSRate);
+-                    if (Op == "" && rate == -1)
++                    double rate = -1;
++                    ClsCom.GetRate(cntFCCode.Code, RateDate, "LC", ref Op, ref rate, ClsConfig.locationDirectives.Ld_POSRate);
++                    // Was "Op == "" && rate == -1" with rate starting at 0: it never triggered
++                    if (string.IsNullOrEmpty(Op) || rate == -1)
+                     {
+                         txtUnitPrice.NumericText = 0;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Rate for chosen currency isn't defined");
++                        ClsCommon.ShowNotification(NotificationOwner, "Rate for chosen currency isn't defined");
+                         //txtUnitPrice.Focus();
+                         return;
+ 
+                     }
+                 }
+@@ -1691,56 +1804,34 @@ namespace SuperStoreMain.Forms.Steps
+         {
+             try
+             {
+                 //CalculatePotentialCost();
+ 
+-                foreach (cntStockUnit cntStockUnit in flpStockUnits.Controls)
+-                {
+-                    if (sender == rbBaseCurrencyLC)
+-                    {
+-                        cntStockUnit.txtPrice1LC.Enabled = true;
+-                        cntStockUnit.txtPrice2LC.Enabled = true;
+-                        cntStockUnit.txtPrice3LC.Enabled = true;
+-
+-                        txtPrice1LL.Enabled = true;
+-                        txtPrice2LL.Enabled = true;
+-                        txtPrice3LL.Enabled = true;
+-
+-                        cntStockUnit.txtPrice1CC.Enabled = false;
+-                        cntStockUnit.txtPrice2CC.Enabled = false;
+-                        cntStockUnit.txtPrice3CC.Enabled = false;
+-
+-                        txtPrice1CC.Enabled = false;
+-                        txtPrice2CC.Enabled = false;
+-                        txtPrice3CC.Enabled = false;
+-                    }
+-                    else
+-                    {
+-                        cntStockUnit.txtPrice1LC.Enabled = false;
+-                        cntStockUnit.txtPrice2LC.Enabled = false;
+-                        cntStockUnit.txtPrice3LC.Enabled = false;
+-
+-                        txtPrice1LL.Enabled = false;
+-                        txtPrice2LL.Enabled = false;
+-                        txtPrice3LL.Enabled = false;
++                // Both radios raise CheckedChanged (the one being unchecked too): react only to the checked one,
++                // otherwise the final state depended on which event came last
++                if (sender is RadioButton senderRadio && !senderRadio.Checked) { return; }
+ 
+-                        cntStockUnit.txtPrice1CC.Enabled = true;
+-                        cntStockUnit.txtPrice2CC.Enabled = true;
+-                        cntStockUnit.txtPrice3CC.Enabled = true;
++                bool baseLC = rbBaseCurrencyLC.Checked;
+ 
+-                        txtPrice1CC.Enabled = true;
+-                        txtPrice2CC.Enabled = true;
+-                        txtPrice3CC.Enabled = true;
+-                    }
++                foreach (cntStockUnit cntStockUnit in flpStockUnits.Controls.OfType<cntStockUnit>())
++                {
++                    cntStockUnit.txtPrice1LC.Enabled = cntStockUnit.txtPrice2LC.Enabled = cntStockUnit.txtPrice3LC.Enabled = baseLC;
++                    cntStockUnit.txtPrice1CC.Enabled = cntStockUnit.txtPrice2CC.Enabled = cntStockUnit.txtPrice3CC.Enabled = !baseLC;
+                 }
+ 
++                // Header prices: outside the units loop (they weren't toggled when no unit existed),
++                // and only in Add: Modify disables them on purpose
++                if (lcFormMode == ClsCommon.FormMode.Add)
++                {
++                    txtPrice1LL.Enabled = txtPrice2LL.Enabled = txtPrice3LL.Enabled = baseLC;
++                    txtPrice1CC.Enabled = txtPrice2CC.Enabled = txtPrice3CC.Enabled = !baseLC;
++                }
+ 
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+ 
+         }
+ 
+         private void txtSalesCoefVal_Validated(object sender, EventArgs e)
+@@ -1753,20 +1844,19 @@ namespace SuperStoreMain.Forms.Steps
+                     else if (sender == txtDiscPrice2) { CalculatePotentialCost("Price2"); }
+                     else if (sender == txtDiscPrice3) { CalculatePotentialCost("Price3"); }
+                 }
+                 else
+                 {
+-                    if (sender != txtDiscPrice2 & sender != txtDiscPrice3)
++                    if (sender != txtDiscPrice2 && sender != txtDiscPrice3)
+                     {
+                         CalculatePotentialCost();
+                     }
+                 }
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
+         private void txtMinQty_Validating(object sender, CancelEventArgs e)
+         {
+@@ -1775,23 +1865,23 @@ namespace SuperStoreMain.Forms.Steps
+                 if (!string.IsNullOrWhiteSpace(txtMaxQty.Text) && !string.IsNullOrWhiteSpace(txtMinQty.Text))
+                 {
+                     if (decimal.TryParse(txtMaxQty.Text.Trim(), out decimal maxQty) &&
+                         decimal.TryParse(txtMinQty.Text.Trim(), out decimal minQty))
+                     {
+-                        if (minQty > maxQty)
++                        // Max 0 = no maximum, same rule as ValidateQuantityDetails
++                        if (maxQty != 0 && minQty > maxQty)
+                         {
+-                            ClsCommon.ShowNotification(this.ParentForm, "Maximum Value Must be Greater than the Minimum Value");
++                            ClsCommon.ShowNotification(NotificationOwner, "Maximum Value Must be Greater than the Minimum Value");
+                             e.Cancel = true;
+                         }
+                     }
+                 }
+ 
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
+         private void pnlCurrency_Validating(object sender, CancelEventArgs e)
+         {
+@@ -1799,24 +1889,27 @@ namespace SuperStoreMain.Forms.Steps
+             {
+ 
+                 rbBaseCurrencyLC.Checked = rbLC.Checked;
+                 rbBaseCurrencyCC.Checked = rbCC.Checked;              
+ 
++                // An empty unit price threw a FormatException here
++                bool hasUnitPrice = !string.IsNullOrWhiteSpace(txtUnitPrice.Text);
++
+                 if (rbCC.Checked)
+                 {
+                     txtUnitPrice.Iscale = CCcostIscale;
+-                    txtUnitPrice.Text = Convert.ToDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
++                    if (hasUnitPrice) txtUnitPrice.Text = ParseDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
+                 }
+                 else if (rbLC.Checked)
+                 {
+                     txtUnitPrice.Iscale = LCcostIscale;
+-                    txtUnitPrice.Text = Convert.ToDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostLCFormat);
++                    if (hasUnitPrice) txtUnitPrice.Text = ParseDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostLCFormat);
+                 }
+                 else
+                 {
+                     txtUnitPrice.Iscale = FCcostIscale;
+-                    txtUnitPrice.Text = Convert.ToDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
++                    if (hasUnitPrice) txtUnitPrice.Text = ParseDouble(txtUnitPrice.Text).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
+                 }
+ 
+             }
+             catch (Exception ex)
+             {
+@@ -1904,63 +1997,54 @@ namespace SuperStoreMain.Forms.Steps
+         {
+             try
+             {
+                 if (lcFormMode == ClsCommon.FormMode.Add && (sender is TextBox textBox && (textBox == txtCustomsPerc || textBox == txtOHPerc)))
+                 {
+-                    txtCostCoef.Text = "0.00";
+-                    if (!string.IsNullOrEmpty(txtCustomsPerc.Text))
+-                    {
+-                        txtCostCoef.Text = (double.Parse(txtCostCoef.Text) + double.Parse(txtCustomsPerc.Text)).ToString();
+-                    }
+-                    if (!string.IsNullOrEmpty(txtOHPerc.Text))
+-                    {
+-                        txtCostCoef.Text = (double.Parse(txtCostCoef.Text) + double.Parse(txtOHPerc.Text)).ToString();
+-                    }
++                    txtCostCoef.Text = (ParseDouble(txtCustomsPerc.Text) + ParseDouble(txtOHPerc.Text)).ToString();
+                 }
+ 
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
++        // chkFollow and chkUseInvDisc mirror each other (the old "Checked || !Checked" condition was always true)
+         private void chkFollow_CheckedChanged(object sender, EventArgs e)
+         {
+             try
+             {
+-
+-                if (((CheckBox)sender).Checked || !((CheckBox)sender).Checked)
++                if (sender == chkUseInvDisc)
+                 {
+-                    if (((CheckBox)sender) == chkUseInvDisc)
+-                    {
+-                        chkFollow.Checked = chkUseInvDisc.Checked;
+-                    }
+-                    else if (((CheckBox)sender) == chkFollow)
+-                    {
+-                        chkUseInvDisc.Checked = chkFollow.Checked;
+-                    }
++                    chkFollow.Checked = chkUseInvDisc.Checked;
++                }
++                else if (sender == chkFollow)
++                {
++                    chkUseInvDisc.Checked = chkFollow.Checked;
+                 }
+-
+-
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
+         private void txtPrice1LL_Validating(object sender, CancelEventArgs e)
+         {
+             try
+             {
+                 string Operator = "";
+                 double Rate = -1;
+ 
+-                ClsCom.GetRate(ClsConfig.gbCurr2, DateTime.Today.ToString(), "LC", ref Operator, ref Rate, ClsConfig.locationDirectives.Ld_POSRate);
++                ClsCom.GetRate(ClsConfig.gbCurr2, RateDate, "LC", ref Operator, ref Rate, ClsConfig.locationDirectives.Ld_POSRate);
++
++                // Without a rate the other currency price is set to 0: say so instead of saving a 0 price silently
++                if ((Operator == "" || Rate == -1) && sender is TextBox)
++                {
++                    ClsCommon.ShowNotification(NotificationOwner, $"Rate From [{ClsConfig.gbCurr2}] To [{ClsConfig.gbCurr1}] Not Defined At {RateDate}: The Other Currency Price Is Set To 0.");
++                }
+ 
+                 if (sender is TextBox textBox)
+                 {
+                     if (sender == txtPrice1LL || sender == txtPrice2LL || sender == txtPrice3LL)
+                     {
+@@ -1968,49 +2052,49 @@ namespace SuperStoreMain.Forms.Steps
+                         {
+                             ((TextBox)sender).Text = "0";
+                         }
+                         else
+                         {
+-                            ((TextBox)sender).Text = ClsPricing.RoundPrice(double.Parse(((TextBox)sender).Text.Trim())).ToString();
++                            ((TextBox)sender).Text = ClsPricing.RoundPrice(ParseDouble(((TextBox)sender).Text)).ToString();
+                         }
+ 
+                         if (Operator != "" && Rate != -1)
+                         {
+                             if (Operator == "*")
+                             {
+                                 if (sender == txtPrice1LL)
+                                 {
+-                                    txtPrice1CC.Text = (Convert.ToDouble(txtPrice1LL.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+-                                    txtPrice1LL.NumericText = Convert.ToDouble(txtPrice1LL.Text);
++                                    txtPrice1CC.Text = (ParseDouble(txtPrice1LL.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                    txtPrice1LL.NumericText = ParseDouble(txtPrice1LL.Text);
+                                 }
+                                 if (sender == txtPrice2LL)
+                                 {
+-                                    txtPrice2CC.Text = (Convert.ToDouble(txtPrice2LL.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+-                                    txtPrice2LL.NumericText = Convert.ToDouble(txtPrice2LL.Text);
++                                    txtPrice2CC.Text = (ParseDouble(txtPrice2LL.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                    txtPrice2LL.NumericText = ParseDouble(txtPrice2LL.Text);
+                                 }
+                                 if (sender == txtPrice3LL)
+                                 {
+-                                    txtPrice3CC.Text = (Convert.ToDouble(txtPrice3LL.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+-                                    txtPrice3LL.NumericText = Convert.ToDouble(txtPrice3LL.Text);
++                                    txtPrice3CC.Text = (ParseDouble(txtPrice3LL.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                    txtPrice3LL.NumericText = ParseDouble(txtPrice3LL.Text);
+                                 }
+                             }
+                             else
+                             {
+                                 if (sender == txtPrice1LL)
+                                 {
+-                                    txtPrice1CC.Text = (Convert.ToDouble(txtPrice1LL.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+-                                    txtPrice1LL.NumericText = Convert.ToDouble(txtPrice1LL.Text);
++                                    txtPrice1CC.Text = (ParseDouble(txtPrice1LL.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                    txtPrice1LL.NumericText = ParseDouble(txtPrice1LL.Text);
+                                 }
+                                 if (sender == txtPrice2LL)
+                                 {
+-                                    txtPrice2CC.Text = (Convert.ToDouble(txtPrice2LL.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+-                                    txtPrice2LL.NumericText = Convert.ToDouble(txtPrice2LL.Text);
++                                    txtPrice2CC.Text = (ParseDouble(txtPrice2LL.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                    txtPrice2LL.NumericText = ParseDouble(txtPrice2LL.Text);
+                                 }
+                                 if (sender == txtPrice3LL)
+                                 {
+-                                    txtPrice3CC.Text = (Convert.ToDouble(txtPrice3LL.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+-                                    txtPrice3LL.NumericText = Convert.ToDouble(txtPrice3LL.Text);
++                                    txtPrice3CC.Text = (ParseDouble(txtPrice3LL.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                    txtPrice3LL.NumericText = ParseDouble(txtPrice3LL.Text);
+                                 }
+                             }
+                         }
+                         else
+                         {
+@@ -2036,34 +2120,34 @@ namespace SuperStoreMain.Forms.Steps
+                         {
+                             if (Operator == "*")
+                             {
+                                 if (sender == txtPrice1CC)
+                                 {
+-                                    txtPrice1LL.Text = (Convert.ToDouble(txtPrice1CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                    txtPrice1LL.Text = (ParseDouble(txtPrice1CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                 }
+                                 if (sender == txtPrice2CC)
+                                 {
+-                                    txtPrice2LL.Text = (Convert.ToDouble(txtPrice2CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                    txtPrice2LL.Text = (ParseDouble(txtPrice2CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                 }
+                                 if (sender == txtPrice3CC)
+                                 {
+-                                    txtPrice3LL.Text = (Convert.ToDouble(txtPrice3CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                    txtPrice3LL.Text = (ParseDouble(txtPrice3CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                 }
+                             }
+                             else
+                             {
+                                 if (sender == txtPrice1CC)
+                                 {
+-                                    txtPrice1LL.Text = (Convert.ToDouble(txtPrice1CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                    txtPrice1LL.Text = (ParseDouble(txtPrice1CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                 }
+                                 if (sender == txtPrice2CC)
+                                 {
+-                                    txtPrice2LL.Text = (Convert.ToDouble(txtPrice2CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                    txtPrice2LL.Text = (ParseDouble(txtPrice2CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                 }
+                                 if (sender == txtPrice3CC)
+                                 {
+-                                    txtPrice3LL.Text = (Convert.ToDouble(txtPrice3CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                    txtPrice3LL.Text = (ParseDouble(txtPrice3CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                 }
+                             }
+                         }
+                         else
+                         {
+@@ -2082,18 +2166,17 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                         }
+                     }
+                 }
+ 
+-                txtDiscPrice_Validating(txtDiscPrice2.Text, new System.ComponentModel.CancelEventArgs());
++                txtDiscPrice_Validating(txtDiscPrice2, new System.ComponentModel.CancelEventArgs());
+                 CalculatePriceForUnit();
+ 
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
+         private void cntCurrency2_Validating(object sender, CancelEventArgs e)
+         {
+@@ -2114,72 +2197,51 @@ namespace SuperStoreMain.Forms.Steps
+             {
+                 if (!string.IsNullOrWhiteSpace(cntBarcode1.txtBarcode1.Text) && !string.IsNullOrWhiteSpace(cntBarcode2.txtBarcode1.Text))
+                 {
+                     if (cntBarcode1.txtBarcode1.Text.Trim() == cntBarcode2.txtBarcode1.Text.Trim())
+                     {
+-                        ClsCommon.ShowNotification(this.ParentForm, "Barcode1 Must Be Different Than Barcode2");
++                        ClsCommon.ShowNotification(NotificationOwner, "Barcode1 Must Be Different Than Barcode2");
+                         ActiveControl = cntBarcode2.txtBarcode1;
+                         e.Cancel = true;
++                        return;
+                     }
+                 }
+ 
+-                if (flpStockUnits.Controls.Count > 0)
++                foreach (cntStockUnit cnt in flpStockUnits.Controls.OfType<cntStockUnit>())
+                 {
+-                    foreach (cntStockUnit cnt in flpStockUnits.Controls)
++                    foreach (cntBarcode barcode in cnt.flpSynBarcode.Controls.OfType<cntBarcode>())
+                     {
+-                        foreach (cntBarcode barcode in cnt.flpSynBarcode.Controls)
++                        string synonym = barcode.txtBarcode1.Text.Trim();
++                        if (synonym != "" && (synonym == cntBarcode1.txtBarcode1.Text.Trim() || synonym == cntBarcode2.txtBarcode1.Text.Trim()))
+                         {
+-                            if (!string.IsNullOrEmpty(barcode.txtBarcode1.Text))
+-                            {
+-                                if (cntBarcode1.txtBarcode1.Text.Trim() == barcode.txtBarcode1.Text || barcode.txtBarcode1.Text == cntBarcode2.txtBarcode1.Text.Trim())
+-                                {
+-                                    ClsCommon.ShowNotification(this.ParentForm, "Duplicate Barcode.");
+-                                    ActiveControl = barcode.txtBarcode1;
+-                                    e.Cancel = true;
+-                                }
+-                            }
++                            // One message, then stop (it used to repeat for every match and still go to the DB check)
++                            ClsCommon.ShowNotification(NotificationOwner, "Duplicate Barcode.");
++                            ActiveControl = barcode.txtBarcode1;
++                            e.Cancel = true;
++                            return;
+                         }
+                     }
+-
+                 }
+ 
+-                if (cntBarcode1.txtBarcode1.LastText == "") { cntBarcode1.txtBarcode1.LastText = cntBarcode1.txtBarcode1.Text; }
+-                if (cntBarcode2.txtBarcode1.LastText == "") { cntBarcode2.txtBarcode1.LastText = cntBarcode2.txtBarcode1.Text; }
++                // Check the barcode being left, against the DB, unless it is still the value loaded from the DB.
++                // LastText is set when the item is loaded (it used to be filled here with the new text, so a changed barcode skipped the check)
++                cntBarcode current = sender == cntBarcode1 ? cntBarcode1 : sender == cntBarcode2 ? cntBarcode2 : null;
++                if (current == null) { return; }
+ 
+-                if (lcFormMode == ClsCommon.FormMode.Modify && ((sender == cntBarcode1 && cntBarcode1.txtBarcode1.LastText == cntBarcode1.txtBarcode1.Text) ||
+-                        (sender == cntBarcode1 && cntBarcode1.txtBarcode1.LastText == cntBarcode1.txtBarcode1.Text)))
++                string currentText = current.txtBarcode1.Text;
++
++                if (lcFormMode == ClsCommon.FormMode.Modify && current.txtBarcode1.LastText == currentText) { return; }
++
++                if (!string.IsNullOrWhiteSpace(currentText) &&
++                    BarcodeSynController.CheckBarcodeSyn(currentText, lcFormMode == ClsCommon.FormMode.Modify ? StockID : 0))
+                 {
++                    ClsCommon.ShowNotification(this, "Barcode Already Exists");
++                    e.Cancel = true;
+                     return;
+                 }
+-                else
+-                {
+-                    if (!string.IsNullOrWhiteSpace(cntBarcode1.txtBarcode1.Text) | !string.IsNullOrWhiteSpace(cntBarcode2.txtBarcode1.Text))
+-                    {
+-                        if (sender == cntBarcode1 && !string.IsNullOrWhiteSpace(cntBarcode1.txtBarcode1.Text))
+-                        {
+-                            if (BarcodeSynController.CheckBarcodeSyn(cntBarcode1.txtBarcode1.Text, lcFormMode == ClsCommon.FormMode.Modify ? StockID : 0))
+-                            {
+-                                ClsCommon.ShowNotification(this, "Barcode Already Exists");
+-                                e.Cancel = true;
+-                                return;
+-                            }
+-                        }
+-                        cntBarcode1.txtBarcode1.LastText = cntBarcode1.txtBarcode1.Text;
+-
+-                        if (sender == cntBarcode2 && !string.IsNullOrWhiteSpace(cntBarcode2.txtBarcode1.Text))
+-                        {
+-                            if (BarcodeSynController.CheckBarcodeSyn(cntBarcode2.txtBarcode1.Text, lcFormMode == ClsCommon.FormMode.Modify ? StockID : 0))
+-                            {
+-                                ClsCommon.ShowNotification(this, "Barcode Already Exists");
+-                                e.Cancel = true;
+-                                return;
+-                            }
+-                        }
+-                        cntBarcode2.txtBarcode1.LastText = cntBarcode2.txtBarcode1.Text;
+ 
+-                    }
+-                }
++                current.txtBarcode1.LastText = currentText;
+ 
+             }
+             catch (Exception ex)
+             {
+                 ClsCommon.ShowException(StepName, ex);
+@@ -2230,39 +2292,39 @@ namespace SuperStoreMain.Forms.Steps
+                     else
+                     {
+                         string Operator = "";
+                         double Rate = -1;
+ 
+-                        ClsCom.GetRate(cntFCCode.Code.ToUpper(), DateTime.Today.ToString(), "CC", ref Operator, ref Rate, ClsConfig.locationDirectives.Ld_BORate);
++                        ClsCom.GetRate(cntFCCode.Code.ToUpper(), RateDate, "CC", ref Operator, ref Rate, ClsConfig.locationDirectives.Ld_BORate);
+ 
+ 
+                         if (!string.IsNullOrEmpty(Operator) && Rate != -1)
+                         {
+                             if (Operator == "*")
+                             {
+-                                txtPotCostFC.Text = (Convert.ToDouble(txtPotCostCC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
++                                txtPotCostFC.Text = (ParseDouble(txtPotCostCC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
+                             }
+                             else
+                             {
+-                                txtPotCostFC.Text = (Convert.ToDouble(txtPotCostCC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
++                                txtPotCostFC.Text = (ParseDouble(txtPotCostCC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
+                             }
+                         }
+                         else
+                         {
+-                            ClsCommon.ShowNotification(this, "Rate From [" + cntFCCode.Code.ToUpper() + "] to [" + ClsConfig.gbCurr1 + "] not defined at #" + DateTime.Today.ToString() + "#.");
++                            ClsCommon.ShowNotification(this, "Rate From [" + cntFCCode.Code.ToUpper() + "] to [" + ClsConfig.gbCurr2 + "] not defined at " + RateDate + ".");
+                             txtPotCostFC.Text = 0.ToString(ClsConfig.locationDirectives.Ld_CostFCFormat);
+                         }
+ 
+                     }
+ 
+                     if (rbBaseCurrencyLC.Checked)
+                     {
+-                        X = Convert.ToDouble(PotCostLC);
++                        X = ParseDouble(PotCostLC);
+                     }
+                     else if (rbBaseCurrencyCC.Checked)
+                     {
+-                        X = Convert.ToDouble(PotCostCC);
++                        X = ParseDouble(PotCostCC);
+                     }
+ 
+ 
+                     string Price1LL, Price2LL, Price3LL, Price1CC, Price2CC, Price3CC = "";
+                     Price1LL = txtPrice1LL.Text;
+@@ -2289,11 +2351,11 @@ namespace SuperStoreMain.Forms.Steps
+                     CalculatePriceForUnit();
+ 
+                 }
+ 
+             }
+-            catch (Exception ex)
++            catch (Exception)
+             {
+ 
+                 throw;
+             }
+         }
+@@ -2307,96 +2369,125 @@ namespace SuperStoreMain.Forms.Steps
+         {
+             try
+             {
+                 if (lcFormMode == ClsCommon.FormMode.Delete)
+                 {
+-                    if (ClsCommon.ShowQuestion(StepName, "Are you sure that you want to delete the record ?") != DialogResult.Yes) { return false; }
+-                    else
++                    if (StockID == 0)
+                     {
+-                        if (StockItemsController.IsMovemented(StockID))
+-                        {
+-                            ClsCommon.ShowNotification(this.ParentForm, "This Item is Already Movemented, Delete Is Not Allowed.");
++                        ClsCommon.ShowNotification(NotificationOwner, "Please Select The Item To Delete");
++                        return false;
++                    }
+ 
+-                            return false;
+-                        }
++                    if (ClsCommon.ShowQuestion(StepName, "Are you sure that you want to delete the record ?") != DialogResult.Yes) { return false; }
++
++                    if (StockItemsController.IsMovemented(StockID))
++                    {
++                        ClsCommon.ShowNotification(NotificationOwner, "This Item is Already Movemented, Delete Is Not Allowed.");
++                        return false;
+                     }
++
++                    // Only the confirmation applies to a delete: the Add / Modify validations below would block it for unrelated fields
++                    return true;
++                }
++
++                if (lcFormMode == ClsCommon.FormMode.Modify && StockID == 0)
++                {
++                    ClsCommon.ShowNotification(NotificationOwner, "Please Select The Item To Modify");
++                    return false;
+                 }
+ 
+                 if (ClsCommon.ShowQuestion(StepName, "Do You Really Want To Save Changes?") == DialogResult.Yes)
+                 {
+-                    if (!ValidateQuantityDetails())
++                    if (!ValidateQuantityDetails(true))
+                     {
+                         return false;
+                     }
+                     if (!ValidatePLU())
+                     {
+                         return false;
+                     }
+                     if (ClsCommon.ExistMissingMandatoryFields(this))
+                     {
+-                        //ClsCommon.ShowNotification(this.ParentForm, "Incomplete Stock Item Definition!!!");
++                        //ClsCommon.ShowNotification(NotificationOwner, "Incomplete Stock Item Definition!!!");
+                         return false;
+                     }
+                     //Conditions related to the UI               
+                     if (string.IsNullOrEmpty(cntSupplier.txtCode.Text.Trim()))
+                     {
+                         tabForm.SelectTab(DefinitionTab);
+                         ActiveControl = cntSupplier.txtCode;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Supplier Code Can Not Be Empty");
++                        ClsCommon.ShowNotification(NotificationOwner, "Supplier Code Can Not Be Empty");
+                         return false;
+                     }
+                     if (string.IsNullOrEmpty(cntCategory.txtCode.Text.Trim()))
+                     {
+                         tabForm.SelectTab(DefinitionTab);
+                         ActiveControl = cntCategory.txtCode;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Category Code Can Not Be Empty");
++                        ClsCommon.ShowNotification(NotificationOwner, "Category Code Can Not Be Empty");
+                         return false;
+                     }
+                     if (string.IsNullOrEmpty(txtSerialNo.Text.Trim()))
+                     {
+                         tabForm.SelectTab(DefinitionTab);
+                         ActiveControl = txtSerialNo;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Serial No. Can Not Be Empty");
++                        ClsCommon.ShowNotification(NotificationOwner, "Serial No. Can Not Be Empty");
++                        return false;
++                    }
++                    // The Validating check can be skipped (Duplicate, focus never leaving the keys...): check the keys again before inserting
++                    if (lcFormMode == ClsCommon.FormMode.Add &&
++                        new StockItemsController().GetStockItems(0, cntSupplier.Code, cntCategory.Code, txtSerialNo.Text.Trim()) != null)
++                    {
++                        tabForm.SelectTab(DefinitionTab);
++                        ActiveControl = txtSerialNo;
++                        ClsCommon.ShowNotification(NotificationOwner, "Code(s) Already Exist");
++                        return false;
++                    }
++                    if (!string.IsNullOrWhiteSpace(txtAddonRef.Text) &&
++                        StockItemsController.GetAddOnRef(txtAddonRef.Text, lcFormMode == ClsCommon.FormMode.Modify ? $"and stk_stkid <> {StockID}" : ""))
++                    {
++                        tabForm.SelectTab(DefinitionTab);
++                        ActiveControl = txtAddonRef;
++                        ClsCommon.ShowNotification(NotificationOwner, "AddOnRef Already Exists!");
+                         return false;
+                     }
+                     if (chk3rdParty.Checked && chkTransp.Checked)
+                     {
+                         tabForm.SelectTab(DefinitionTab);
+                         ActiveControl = chkTransp;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Could Not Accept Allow Transposition Set To 'Y' While Third Party Item Is Set To 'Y'");
++                        ClsCommon.ShowNotification(NotificationOwner, "Could Not Accept Allow Transposition Set To 'Y' While Third Party Item Is Set To 'Y'");
+                         return false;
+ 
+                     }
+                     if (chk3rdParty.Checked && chkAssembly.Checked)
+                     {
+                         tabForm.SelectTab(DefinitionTab);
+                         ActiveControl = chkAssembly;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Could Not Accept Assembly Created Set To 'Y' While Third Party Item Is Set To 'Y'");
++                        ClsCommon.ShowNotification(NotificationOwner, "Could Not Accept Assembly Created Set To 'Y' While Third Party Item Is Set To 'Y'");
+                         return false;
+                     }
+                     if (lcFormMode == ClsCommon.FormMode.Modify && ((chk3rdParty.Checked && ThirdParty == "N") || (!chk3rdParty.Checked && ThirdParty == "Y")))
+                     {
+                         if (StockItemsController.IsMovemented(StockID))
+                         {
+-                            ClsCommon.ShowNotification(this.ParentForm, "This Item is Already Movemented, Change Is Not Allowed.");
++                            ClsCommon.ShowNotification(NotificationOwner, "This Item is Already Movemented, Change Is Not Allowed.");
+                             ActiveControl = chk3rdParty;
+                             return false;
+                         }
+                     }
+ 
+                     if (string.IsNullOrEmpty(cntFCCode.txtCode.Text.Trim()))
+                     {
+                         tabForm.SelectTab(CostPriceTab);
+                         ActiveControl = cntFCCode.txtCode;
+-                        ClsCommon.ShowNotification(this.ParentForm, "FC Code Can Not Be Empty");
++                        ClsCommon.ShowNotification(NotificationOwner, "FC Code Can Not Be Empty");
+                         return false;
+                     }
+                     if (chkSubjectVAT.Checked && string.IsNullOrEmpty(cntVat1.txtCode.Text.Trim()))
+                     {
+                         tabForm.SelectTab(CostPriceTab);
+                         ActiveControl = cntVat1.txtCode;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Please Fill VAT Code.");
++                        ClsCommon.ShowNotification(NotificationOwner, "Please Fill VAT Code.");
+                         return false;
+                     }
+ 
+                     if (flpStockUnits.Controls.Count == 0
+                             ||
+@@ -2404,31 +2495,59 @@ namespace SuperStoreMain.Forms.Steps
+                              cnt => !cnt.Delete && !string.IsNullOrEmpty(cnt.cntUnit.txtCode.Text) && !string.IsNullOrEmpty(cnt.cntParentUnit.txtCode.Text)).Length == 0)
+ 
+                     {
+                         tabForm.SelectTab(tabStckUnits);
+                         ActiveControl = btnAddUnit;
+-                        ClsCommon.ShowNotification(this.ParentForm, "Stock Unit Not Defined");
++                        ClsCommon.ShowNotification(NotificationOwner, "Stock Unit Not Defined");
+                         return false;
+                     }
+ 
+-                    txtUnitsLogging.Text = ValidateUnits();
++                    // Validation only: no price recalculation here, what is on screen is what gets saved
++                    txtUnitsLogging.Text = ValidateUnits(false);
+ 
+                     if (txtUnitsLogging.Text.Trim() != "")
+                     {
+-                        ClsCommon.ShowNotification(this.ParentForm, txtUnitsLogging.Text);
++                        ClsCommon.ShowNotification(NotificationOwner, txtUnitsLogging.Text);
+                         return false;
+ 
+                     }
+ 
++                    if (!ValidateAllBarcodes())
++                    {
++                        return false;
++                    }
++
++                    List<cntSupplierReference> suppRefRows = FpnlSuppRef.Controls.OfType<cntSupplierReference>().Where(cnt => !cnt.Delete).ToList();
+ 
+-                    if (FpnlSuppRef.Controls.Count != 0 &&
+-                 Array.FindAll(FpnlSuppRef.Controls.Cast<Control>().OfType<cntSupplierReference>().ToArray(),
+-                      cnt => !string.IsNullOrEmpty(cnt.txtReference.Text)).Length == 0)
++                    if (suppRefRows.Count != 0 && suppRefRows.All(cnt => string.IsNullOrWhiteSpace(cnt.txtReference.Text)))
++                    {
++                        tabForm.SelectTab(SupplierRefTab);
++                        ClsCommon.ShowNotification(NotificationOwner, "Supplier Reference Not Defined");
++                        return false;
++                    }
+ 
++                    // A row with only a supplier or only a reference used to be dropped silently by SaveData
++                    cntSupplierReference incompleteRow = suppRefRows.FirstOrDefault(cnt =>
++                        string.IsNullOrWhiteSpace(cnt.cntSuppliers1.Code) != string.IsNullOrWhiteSpace(cnt.txtReference.Text));
++                    if (incompleteRow != null)
+                     {
+                         tabForm.SelectTab(SupplierRefTab);
+-                        ClsCommon.ShowNotification(this.ParentForm, "Supplier Reference Not Defined");
++                        ActiveControl = string.IsNullOrWhiteSpace(incompleteRow.cntSuppliers1.Code) ? (Control)incompleteRow.cntSuppliers1.txtCode : incompleteRow.txtReference;
++                        ClsCommon.ShowNotification(NotificationOwner, "Supplier Reference Row Incomplete: Supplier And Reference Are Both Required");
++                        return false;
++                    }
++
++                    string duplicateSuppRef = suppRefRows
++                        .Where(cnt => !string.IsNullOrWhiteSpace(cnt.cntSuppliers1.Code) && !string.IsNullOrWhiteSpace(cnt.txtReference.Text))
++                        .GroupBy(cnt => cnt.cntSuppliers1.Code.Trim().ToUpper() + "|" + cnt.txtReference.Text.Trim().ToUpper())
++                        .Where(group => group.Count() > 1)
++                        .Select(group => group.Key)
++                        .FirstOrDefault();
++                    if (duplicateSuppRef != null)
++                    {
++                        tabForm.SelectTab(SupplierRefTab);
++                        ClsCommon.ShowNotification(NotificationOwner, "Duplicate Supplier Reference: " + duplicateSuppRef.Replace("|", " / "));
+                         return false;
+                     }
+ 
+                     if (!clsDynamicFields.SaveDynamicFieldsIsAllowed())
+                     {
+@@ -2444,24 +2563,182 @@ namespace SuperStoreMain.Forms.Steps
+             {
+                 throw;
+             }
+         }
+ 
++        // Barcode 1 / 2 and all unit synonyms must be unique in the form and in the database.
++        // The field-level checks only notify (the unit barcode event can't cancel), so they are enforced here before saving
++        private bool ValidateAllBarcodes()
++        {
++            List<string> barcodes = new List<string>();
++
++            if (!string.IsNullOrWhiteSpace(cntBarcode1.txtBarcode1.Text)) barcodes.Add(cntBarcode1.txtBarcode1.Text.Trim());
++            if (!string.IsNullOrWhiteSpace(cntBarcode2.txtBarcode1.Text)) barcodes.Add(cntBarcode2.txtBarcode1.Text.Trim());
++
++            foreach (cntStockUnit unit in flpStockUnits.Controls.OfType<cntStockUnit>().Where(unit => !unit.Delete))
++            {
++                foreach (cntBarcode barcode in unit.flpSynBarcode.Controls.OfType<cntBarcode>().Where(barcode => !barcode.Delete))
++                {
++                    if (!string.IsNullOrWhiteSpace(barcode.txtBarcode1.Text)) barcodes.Add(barcode.txtBarcode1.Text.Trim());
++                }
++            }
++
++            string duplicate = barcodes.GroupBy(barcode => barcode).Where(group => group.Count() > 1).Select(group => group.Key).FirstOrDefault();
++            if (duplicate != null)
++            {
++                ClsCommon.ShowNotification(NotificationOwner, $"Duplicate Barcode '{duplicate}'.");
++                return false;
++            }
++
++            foreach (string barcode in barcodes)
++            {
++                if (BarcodeSynController.CheckBarcodeSyn(barcode, lcFormMode == ClsCommon.FormMode.Modify ? StockID : 0))
++                {
++                    ClsCommon.ShowNotification(NotificationOwner, $"Barcode '{barcode}' Already Exists.");
++                    return false;
++                }
++            }
++
++            return true;
++        }
++
+         private void SaveData()
+         {
++            StockItemsController SaveOperation = new StockItemsController();
++            StockItems stkItm;
++
++            if (lcFormMode == ClsCommon.FormMode.Add)
++            {
++                // GetLast() is MAX + 1 read outside the insert transaction: two users adding at the same time can get the same ID.
++                // On a primary key violation, take a new ID and try again
++                int attempt = 0;
++                while (true)
++                {
++                    stkItm = BuildStockItem(StockItemsController.GetLast());
++                    try
++                    {
++                        SaveOperation.InsertStockItems(stkItm);
++                        break;
++                    }
++                    catch (System.Data.SqlClient.SqlException ex) when ((ex.Number == 2627 || ex.Number == 2601) && ++attempt < 3)
++                    {
++                    }
++                }
++            }
++            else if (lcFormMode == ClsCommon.FormMode.Modify)
++            {
++                stkItm = BuildStockItem(StockID);
++                KeepDatabaseOwnedValues(stkItm);
++
++                SaveOperation.UpdateStockItems(stkItm);
++
++                if (OpenedFromAnotherForm)
++                {
++                    this.DialogResult = DialogResult.OK;
++                }
++            }
++            else if (lcFormMode == ClsCommon.FormMode.Delete)
++            {
++                stkItm = BuildStockItem(StockID);
++                SaveOperation.DeleteStockItems(stkItm);
++                return;
++            }
++            else
++            {
++                return;
++            }
++
++            // The item is saved at this point. Dynamic fields are still saved outside its transaction: if they fail, report it
++            // but don't let the user press Save again, which would insert the item a second time
+             try
+             {
++                clsDynamicFields.intEntity = stkItm.Stk_StkId;
+ 
+-                StockItemsController SaveOperation = new StockItemsController();
++                using (System.Data.SqlClient.SqlConnection sqlConnection = new System.Data.SqlClient.SqlConnection(ClsConfig.SQLConnectionString))
++                {
++                    sqlConnection.Open();
++
++                    using (System.Data.SqlClient.SqlCommand sqlCommand = new System.Data.SqlClient.SqlCommand("", sqlConnection))
++                    {
++                        clsDynamicFields.SaveDynamicFields(sqlCommand);
++                    }
++
++                }
++            }
++            catch (Exception ex)
++            {
++                ClsCommon.ShowException(StepName, new Exception("The item was saved, but its dynamic fields were not: " + ex.Message, ex));
++            }
++        }
++
++        // Quantities, costs, dates, YTD and last-purchase values are maintained by transactions (PI, DN, counts...) and are
++        // read-only in Modify. Sending the values loaded when the form opened overwrote anything posted since then,
++        // and the fields the form doesn't show at all (HO ID, YTD, LStatCoef) were saved as null. Take them from the database now
++        private void KeepDatabaseOwnedValues(StockItems stkItm)
++        {
++            StockItems dbItem = new StockItemsController().GetStockItems(stkItm.Stk_StkId);
++            if (dbItem == null) { return; }
++
++            stkItm.Stk_HoStkId = dbItem.Stk_HoStkId;
++            stkItm.Stk_LStatCoef = dbItem.Stk_LStatCoef;
++
++            stkItm.Stk_BBFDate1 = dbItem.Stk_BBFDate1;
++            stkItm.Stk_BBFQty1 = dbItem.Stk_BBFQty1;
++            stkItm.Stk_AvlbQty1 = dbItem.Stk_AvlbQty1;
++            stkItm.Stk_Return1 = dbItem.Stk_Return1;
++            stkItm.Stk_LDateCount = dbItem.Stk_LDateCount;
++
++            stkItm.Stk_BBFCostLC = dbItem.Stk_BBFCostLC;
++            stkItm.Stk_BBFCostCC = dbItem.Stk_BBFCostCC;
++            stkItm.Stk_BBFCostFC = dbItem.Stk_BBFCostFC;
++            stkItm.Stk_ActCostLL = dbItem.Stk_ActCostLL;
++            stkItm.Stk_ActCostCC = dbItem.Stk_ActCostCC;
++            stkItm.Stk_ActCostFC = dbItem.Stk_ActCostFC;
++            stkItm.Stk_LstCostLL = dbItem.Stk_LstCostLL;
++            stkItm.Stk_LstCostCC = dbItem.Stk_LstCostCC;
++            stkItm.Stk_LstCostFC = dbItem.Stk_LstCostFC;
++            stkItm.stk_PotcostLL = dbItem.stk_PotcostLL;
++            stkItm.stk_PotCostCC = dbItem.stk_PotCostCC;
++            stkItm.stk_PotCostFC = dbItem.stk_PotCostFC;
++            stkItm.stk_potchangeDate = dbItem.stk_potchangeDate;
++
++            stkItm.Stk_YTDQtyIn = dbItem.Stk_YTDQtyIn;
++            stkItm.Stk_YTDQtyOut = dbItem.Stk_YTDQtyOut;
++            stkItm.Stk_YTDAmtInLL = dbItem.Stk_YTDAmtInLL;
++            stkItm.Stk_YTDAmtOutLL = dbItem.Stk_YTDAmtOutLL;
++            stkItm.Stk_YTDAmtInUSD = dbItem.Stk_YTDAmtInUSD;
++            stkItm.Stk_YTDAmtOutUSD = dbItem.Stk_YTDAmtOutUSD;
++
++            // Last cost area of the file price: "UPDATED FROM LAST PURCHASE INVOICE"
++            if (stkItm.stk_FilePrice != null && dbItem.stk_FilePrice != null && dbItem.stk_FilePrice.Sfp_stkId != null)
++            {
++                stkItm.stk_FilePrice.Sfp_InvCurr = dbItem.stk_FilePrice.Sfp_InvCurr;
++                stkItm.stk_FilePrice.Sfp_LCOrginalCost = dbItem.stk_FilePrice.Sfp_LCOrginalCost;
++                stkItm.stk_FilePrice.Sfp_PINo = dbItem.stk_FilePrice.Sfp_PINo;
++                stkItm.stk_FilePrice.Sfp_SupInvNoOrdNo = dbItem.stk_FilePrice.Sfp_SupInvNoOrdNo;
++                stkItm.stk_FilePrice.Sfp_LCItmDiscount = dbItem.stk_FilePrice.Sfp_LCItmDiscount;
++                stkItm.stk_FilePrice.Sfp_LCInvDiscount = dbItem.stk_FilePrice.Sfp_LCInvDiscount;
++                stkItm.stk_FilePrice.Sfp_LCPurQty = dbItem.stk_FilePrice.Sfp_LCPurQty;
++                stkItm.stk_FilePrice.Sfp_LCPromQty = dbItem.stk_FilePrice.Sfp_LCPromQty;
++                stkItm.stk_FilePrice.Sfp_LCFreeQty = dbItem.stk_FilePrice.Sfp_LCFreeQty;
++                stkItm.stk_FilePrice.Sfp_LCExtraQty = dbItem.stk_FilePrice.Sfp_LCExtraQty;
++                stkItm.stk_FilePrice.Sfp_ContractQty = dbItem.stk_FilePrice.Sfp_ContractQty;
++            }
++        }
++
++        private StockItems BuildStockItem(int stkId)
++        {
++            try
++            {
+                 StockItems stkItm = new StockItems();
+ 
+                 //DEFINITION
+                 stkItm.Stk_Supplier = cntSupplier.Code;
+                 stkItm.Stk_Category = cntCategory.Code;
+                 stkItm.Stk_Serial = txtSerialNo.Text;
+                 stkItm.Stk_Status = chkActive.Checked ? "A" : "I";
+-                stkItm.Stk_StkId = lcFormMode == ClsCommon.FormMode.Add ? StockItemsController.GetLast() : StockID;
++                stkItm.Stk_StkId = stkId;
+                 //stkItm.Stk_HoStkId = !string.IsNullOrEmpty(txtHOCode.Text) ? Convert.ToInt32(txtHOCode.Text) : 0;
+                 stkItm.Stk_Desc = !string.IsNullOrEmpty(txtDesc.Text.Trim()) ? txtDesc.Text.Trim() : null;
+                 stkItm.Stk_DescPos = !string.IsNullOrEmpty(txtPOSDesc.Text.Trim()) ? txtPOSDesc.Text.Trim() : null;
+                 stkItm.Stk_Brand = !string.IsNullOrEmpty(cntBrand.Code) ? cntBrand.Code : null;
+                 stkItm.Stk_CrDate = !string.IsNullOrEmpty(dteCrDate.Text) ? Convert.ToDateTime(dteCrDate.Text) : (DateTime?)null;
+@@ -2533,16 +2810,19 @@ namespace SuperStoreMain.Forms.Steps
+                 WarehousesController WarehousesController = new WarehousesController();
+                 List<string> whCodes = WarehousesController.GetWarehousesList().Select(w => w.Wh_Code).ToList();
+                 stkItm.Stk_StockQtyList = new List<StockQty>();
+                 foreach (string WH in whCodes)
+                 {
++                    // A warehouse missing from the grid used to crash on [0]: it gets 0 / 0
++                    DataRow whRow = dtQuantityDetails.Select($" [Wh Code] = '{WH.Replace("'", "''")}'").FirstOrDefault();
++
+                     StockQty stockQty = new StockQty()
+                     {
+                         Qty_Stkid = stkItm.Stk_StkId,
+                         Qty_WH = Convert.ToInt32(WH),
+-                        Qty_Min = Convert.ToInt32(dtQuantityDetails.Select($" [Wh Code] = '{WH}'")[0]["Minimum Qty"] == DBNull.Value ? 0 : dtQuantityDetails.Select($" [Wh Code] = '{WH}'")[0]["Minimum Qty"]),
+-                        Qty_Max = Convert.ToInt32(dtQuantityDetails.Select($" [Wh Code] = '{WH}'")[0]["Maximum Qty"] == DBNull.Value ? 0 : dtQuantityDetails.Select($" [Wh Code] = '{WH}'")[0]["Maximum Qty"])
++                        Qty_Min = Convert.ToInt32(whRow == null || whRow["Minimum Qty"] == DBNull.Value ? 0 : whRow["Minimum Qty"]),
++                        Qty_Max = Convert.ToInt32(whRow == null || whRow["Maximum Qty"] == DBNull.Value ? 0 : whRow["Maximum Qty"])
+ 
+                     };
+                     stkItm.Stk_StockQtyList.Add(stockQty);
+ 
+                 }
+@@ -2670,12 +2950,14 @@ namespace SuperStoreMain.Forms.Steps
+                                 SUnit_Weight = !string.IsNullOrEmpty(cnt.txtWeight.Text) ? Convert.ToDouble(cnt.txtWeight.Text) : (double?)null,
+                                 SUnit_Active = cnt.chkActiveUnit.Checked ? "Y" : "N",
+                             };
+ 
+ 
+-                            if ((lcFormMode == ClsCommon.FormMode.Modify
+-                                && ((txtSalesCoefVal.Text != null && txtSalesCoefVal.Text != txtSalesCoefVal.LastText)
++                            // Price-change history: new item, or a price / coefficient changed in Modify (not for a deleted item or unit)
++                            if (!cnt.Delete &&
++                                ((lcFormMode == ClsCommon.FormMode.Modify
++                                && ((txtSalesCoefVal.Text != txtSalesCoefVal.LastText)
+                                 || (!string.IsNullOrEmpty(cnt.txtPrice1LC.Text) && cnt.txtPrice1LC.Text != cnt.txtPrice1LC.LastText)
+                                 || (!string.IsNullOrEmpty(cnt.txtPrice1CC.Text) && cnt.txtPrice1CC.Text != cnt.txtPrice1CC.LastText)
+                                 || (!string.IsNullOrEmpty(cnt.txtP1P3Disc.Text) && cnt.txtP1P3Disc.Text != cnt.txtP1P3Disc.LastText)
+                                 || (!string.IsNullOrEmpty(cnt.txtPrice3LC.Text) && cnt.txtPrice3LC.Text != cnt.txtPrice3LC.LastText)
+                                 || (!string.IsNullOrEmpty(cnt.txtPrice3CC.Text) && cnt.txtPrice3CC.Text != cnt.txtPrice3CC.LastText)
+@@ -2683,13 +2965,11 @@ namespace SuperStoreMain.Forms.Steps
+                                 || (!string.IsNullOrEmpty(cnt.txtPrice2LC.Text) && cnt.txtPrice2LC.Text != cnt.txtPrice2LC.LastText)
+                                 || (!string.IsNullOrEmpty(cnt.txtPrice2CC.Text) && cnt.txtPrice2CC.Text != cnt.txtPrice2CC.LastText)
+                                 ))
+                                 ||
+                                lcFormMode == ClsCommon.FormMode.Add
+-                               ||
+-                               lcFormMode == ClsCommon.FormMode.Delete
+-                               )
++                               ))
+                             {
+ 
+                                 ChangeItmPrice changeItmPrice = new ChangeItmPrice()
+                                 {
+                                     Cip_StkId = stkItm.Stk_StkId,
+@@ -2755,49 +3035,21 @@ namespace SuperStoreMain.Forms.Steps
+                         lsd_SG2RecID = cntDepGrpSub.cntSubGroup2.Sub2RecID != -1 && cntDepGrpSub.cntSubGroup2.Sub2RecID != 0 ? cntDepGrpSub.cntSubGroup2.Sub2RecID : (int?)null,
+                         lsd_SG3RecID = cntDepGrpSub.cntSubGroup3.Sub3RecID != -1 && cntDepGrpSub.cntSubGroup3.Sub3RecID != 0 ? cntDepGrpSub.cntSubGroup3.Sub3RecID : (int?)null,
+                         lsd_SG4Recid = cntDepGrpSub.cntSubGroup4.Sub4RecID != -1 && cntDepGrpSub.cntSubGroup4.Sub4RecID != 0 ? cntDepGrpSub.cntSubGroup4.Sub4RecID : (int?)null,
+                     };
+                 }
+-
+-                //stkItm.ClsDynamicFields = clsDynamicFields;
+-
+-
+-                if (lcFormMode == ClsCommon.FormMode.Add)
+-                {
+-                    SaveOperation.InsertStockItems(stkItm);
+-
+-                }
+                 else if (lcFormMode == ClsCommon.FormMode.Modify)
+                 {
+-                    SaveOperation.UpdateStockItems(stkItm);
+-
+-                    if (OpenedFromAnotherForm)
+-                    {
+-                        this.DialogResult = DialogResult.OK;
+-                    
+-                    }
+-
++                    // Department cleared: a link without department makes UpdateStockItems delete the existing one
++                    stkItm.Stk_LinkStockDept = new LinkStockDept() { lsd_StkRecID = stkItm.Stk_StkId };
+                 }
+-                else if (lcFormMode == ClsCommon.FormMode.Delete)
+-                {
+-                    SaveOperation.DeleteStockItems(stkItm);
+-                }
+-
+-                //Temporary done outside the transaction
+-                using (System.Data.SqlClient.SqlConnection sqlConnection = new System.Data.SqlClient.SqlConnection(ClsConfig.SQLConnectionString))
+-                {
+-                    sqlConnection.Open();
+-
+-                    using (System.Data.SqlClient.SqlCommand sqlCommand = new System.Data.SqlClient.SqlCommand("", sqlConnection))
+-                    {
+-                        clsDynamicFields.SaveDynamicFields(sqlCommand);
+-                    }
+ 
+-                }
++                //stkItm.ClsDynamicFields = clsDynamicFields;
+ 
++                return stkItm;
+             }
+-            catch (Exception ex)
++            catch (Exception)
+             {
+                 throw;
+             }
+         }
+ 
+@@ -2869,20 +3121,16 @@ namespace SuperStoreMain.Forms.Steps
+                 grdQuantityDetails.Splits[0].DisplayColumns["Return Qty"].Merge = C1.Win.C1TrueDBGrid.ColumnMergeEnum.Free;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Return Qty"].FooterStyle.HorizontalAlignment = C1.Win.C1TrueDBGrid.AlignHorzEnum.Center;
+ 
+                 grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].DataColumn.Caption = "Minimum Qty";
+                 grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].Style.HorizontalAlignment = C1.Win.C1TrueDBGrid.AlignHorzEnum.Center;
+-                grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].Locked = false;
+-                grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].AllowFocus = true;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].Width = 100;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].DataColumn.NumberFormat = ClsConfig.locationDirectives.Ld_NoOfDecQtyFormat;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].FooterStyle.HorizontalAlignment = C1.Win.C1TrueDBGrid.AlignHorzEnum.Far;
+ 
+                 grdQuantityDetails.Splits[0].DisplayColumns["Maximum Qty"].DataColumn.Caption = "Maximum Qty";
+                 grdQuantityDetails.Splits[0].DisplayColumns["Maximum Qty"].Style.HorizontalAlignment = C1.Win.C1TrueDBGrid.AlignHorzEnum.Center;
+-                grdQuantityDetails.Splits[0].DisplayColumns["Maximum Qty"].Locked = false;
+-                grdQuantityDetails.Splits[0].DisplayColumns["Minimum Qty"].AllowFocus = true;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Maximum Qty"].Width = 100;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Maximum Qty"].DataColumn.NumberFormat = ClsConfig.locationDirectives.Ld_NoOfDecQtyFormat;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Maximum Qty"].FooterStyle.HorizontalAlignment = C1.Win.C1TrueDBGrid.AlignHorzEnum.Far;
+ 
+                 grdQuantityDetails.Splits[0].DisplayColumns["Expiry Date"].DataColumn.Caption = "Expiry Date";
+@@ -2913,20 +3161,35 @@ namespace SuperStoreMain.Forms.Steps
+                 grdQuantityDetails.Splits[0].DisplayColumns["Exp Lot Return Qty"].DataColumn.NumberFormat = ClsConfig.locationDirectives.Ld_NoOfDecQtyFormat;
+                 grdQuantityDetails.Splits[0].DisplayColumns["Exp Lot Return Qty"].Merge = C1.Win.C1TrueDBGrid.ColumnMergeEnum.Free;
+ 
+                 grdQuantityDetails.AutoFixGrid();
+ 
++                SetQuantityDetailsGridEditable();
+                 ResponsiveQuantityDetailsGrid();
+                 CalculateQuantityDetailsGridTotals();
+ 
+             }
+             catch (Exception)
+             {
+                 throw;
+             }
+         }
+ 
++        // Min / Max Qty can be typed only in Add / Modify. AllowFocus is set with Locked because it is what shows the column as editable (blue)
++        private void SetQuantityDetailsGridEditable()
++        {
++            if (dtQuantityDetails == null || grdQuantityDetails.DataSource == null) { return; }
++
++            bool editable = lcFormMode == ClsCommon.FormMode.Add || lcFormMode == ClsCommon.FormMode.Modify;
++
++            foreach (string column in new[] { "Minimum Qty", "Maximum Qty" })
++            {
++                grdQuantityDetails.Splits[0].DisplayColumns[column].Locked = !editable;
++                grdQuantityDetails.Splits[0].DisplayColumns[column].AllowFocus = editable;
++            }
++        }
++
+         private void ResponsiveQuantityDetailsGrid()
+         {
+             try
+             {
+ 
+@@ -3035,24 +3298,26 @@ namespace SuperStoreMain.Forms.Steps
+                 {
+                     if (minValue < 0)
+                     {
+                         ClsCommon.ShowNotification(this, "Value Cannot Be Negative!");
+                         e.Cancel = true;
++                        return;
+                     }
+                 }
+ 
+                 if (!string.IsNullOrEmpty(grdQuantityDetails.Columns["Maximum Qty"].Value?.ToString()) &&
+                          double.TryParse(grdQuantityDetails.Columns["Maximum Qty"].Value.ToString(), out double maxValue))
+                 {
+                     if (maxValue < 0)
+                     {
+                         ClsCommon.ShowNotification(this, "Value Cannot Be Negative!");
+                         e.Cancel = true;
++                        return;
+                     }
+                 }
+ 
+-                if (!ValidateQuantityDetails())
++                if (!ValidateQuantityDetails(false))
+                 {
+                     if(grdQuantityDetails.Columns[grdQuantityDetails.Col].DataField == "Maximum Qty")
+                     {
+                         grdQuantityDetails.Columns["Maximum Qty"].Value = 0;
+                     }
+@@ -3071,28 +3336,50 @@ namespace SuperStoreMain.Forms.Steps
+             {
+                 ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
+-        private bool ValidateQuantityDetails()
++        // Current row = the row being edited (its value isn't in dtQuantityDetails yet).
++        // allRows: also every warehouse row of the table (Save used to check the selected row only)
++        private bool ValidateQuantityDetails(bool allRows)
+         {
+ 
+             try
+             {
+                 string minText = grdQuantityDetails.Columns["Minimum Qty"].Text.Trim();
+                 string maxText = grdQuantityDetails.Columns["Maximum Qty"].Text.Trim();
+ 
+-                if (!string.IsNullOrEmpty(minText) &&
++                bool invalid = !string.IsNullOrEmpty(minText) &&
+                     !string.IsNullOrEmpty(maxText) &&
+                     double.TryParse(minText, out double minQty) &&
+                     double.TryParse(maxText, out double maxQty) &&
+                     maxQty != 0 &&
+-                    minQty > maxQty)
++                    minQty > maxQty;
++
++                string invalidWarehouse = "";
++
++                if (!invalid && allRows && dtQuantityDetails != null)
++                {
++                    foreach (DataRow row in dtQuantityDetails.Rows)
++                    {
++                        double rowMin = row["Minimum Qty"] == DBNull.Value ? 0 : Convert.ToDouble(row["Minimum Qty"]);
++                        double rowMax = row["Maximum Qty"] == DBNull.Value ? 0 : Convert.ToDouble(row["Maximum Qty"]);
++
++                        if (rowMax != 0 && rowMin > rowMax)
++                        {
++                            invalid = true;
++                            invalidWarehouse = $" (WH {row["WH Code"]})";
++                            break;
++                        }
++                    }
++                }
++
++                if (invalid)
+                 {
+                     ClsCommon.ShowNotification(
+                         this,
+-                        "Minimum Qty cannot be greater than Maximum Qty!"
++                        "Minimum Qty cannot be greater than Maximum Qty!" + invalidWarehouse
+                     );
+ 
+                     return false;
+                 }
+                 return true;
+@@ -3108,11 +3395,11 @@ namespace SuperStoreMain.Forms.Steps
+ 
+         private void tabForm_Selecting(object sender, TabControlCancelEventArgs e)
+         {
+             try
+             {
+-                if (!ValidateQuantityDetails())
++                if (!ValidateQuantityDetails(false))
+                 {
+                     e.Cancel = true;
+                 }
+             }
+             catch (Exception ex)
+@@ -3125,11 +3412,12 @@ namespace SuperStoreMain.Forms.Steps
+         #endregion
+ 
+ 
+         #region Validate Units
+ 
+-        public string ValidateUnits()
++        // recalculate = false: check the units and the packing only, without re-pricing the units from the base unit
++        public string ValidateUnits(bool recalculate = true)
+         {
+             DataTable dtUnits;
+             string BasicUnit = "";
+ 
+             try
+@@ -3169,12 +3457,12 @@ namespace SuperStoreMain.Forms.Steps
+                         dr["UnitDescription"] = cntStockUnit.cntUnit.Description;
+                         dr["ParentUnit"] = cntStockUnit.cntParentUnit.Code?.ToUpper();
+                         dr["ParentUnitDescription"] = cntStockUnit.cntParentUnit.Description;
+                         dr["IsBasicUnit"] = cntStockUnit.chkBaseUnit.Checked;
+                         dr["IsDefaultPIUnit"] = cntStockUnit.chkDefaultPIUnit.Checked;
+-                        dr["Packing"] = Convert.ToDouble(cntStockUnit.txtPacking.Text);
+-                        dr["PackingBasic"] = Convert.ToDouble(cntStockUnit.txtPackingBasic.Text);
++                        dr["Packing"] = ParseDouble(cntStockUnit.txtPacking.Text);
++                        dr["PackingBasic"] = ParseDouble(cntStockUnit.txtPackingBasic.Text);
+ 
+                         dtUnits.Rows.Add(dr);
+ 
+                     }
+ 
+@@ -3351,29 +3639,36 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                 foreach (cntStockUnit cntStockUnit in flpStockUnits.Controls)
+                 {
+                     if (cntStockUnit.Visible)
+                     {
+-                        cntStockUnit.txtPackingBasic.Text = Convert.ToDouble(dtUnits.Select($" Unit = '{cntStockUnit.cntUnit.Code}' ")[0]["PackingBasic"]).ToString(ClsConfig.locationDirectives.Ld_NoOfDecQtyFormat);
++                        // Deleted units are not in dtUnits ([0] used to crash on them)
++                        DataRow unitRow = dtUnits.Select($" Unit = '{cntStockUnit.cntUnit.Code?.Replace("'", "''")}' ").FirstOrDefault();
++                        if (unitRow == null) { continue; }
++
++                        cntStockUnit.txtPackingBasic.Text = Convert.ToDouble(unitRow["PackingBasic"]).ToString(ClsConfig.locationDirectives.Ld_NoOfDecQtyFormat);
++
++                        // Validation only (Save): keep the prices as they are on screen
++                        if (!recalculate) { continue; }
+ 
+                         foreach (cntStockUnit cnt in flpStockUnits.Controls)
+                         {
+                             if (cnt.chkBaseUnit.Checked)
+                             {
+-                                if (Convert.ToDouble(cntStockUnit.txtPackingBasic.Text) != 0)
++                                if (ParseDouble(cntStockUnit.txtPackingBasic.Text) != 0)
+                                 {
+                                     string Price1LL, Price2LL, Price3LL, Price1CC, Price2CC, Price3CC = "";
+                                     Price1LL = cnt.txtPrice1LC.Text;
+                                     Price2LL = cnt.txtPrice2LC.Text;
+                                     Price3LL = cnt.txtPrice3LC.Text;
+                                     Price1CC = cnt.txtPrice1CC.Text;
+                                     Price2CC = cnt.txtPrice2CC.Text;
+                                     Price3CC = cnt.txtPrice3CC.Text;
+ 
+-                                    if (cntStockUnit.txtPackingBasic.LastText != cntStockUnit.txtPackingBasic.Text || ((cntStockUnit.txtDiscount.AllowEmptyNumeric == true && cntStockUnit.txtDiscount.Text == "") || Convert.ToDouble(cntStockUnit.txtDiscount.Text) == 0))
++                                    if (cntStockUnit.txtPackingBasic.LastText != cntStockUnit.txtPackingBasic.Text || ((cntStockUnit.txtDiscount.AllowEmptyNumeric == true && cntStockUnit.txtDiscount.Text == "") || ParseDouble(cntStockUnit.txtDiscount.Text) == 0))
+                                     {
+-                                        ClsPricing.CalculatePriceForUnits(Convert.ToDouble(cntStockUnit.txtPackingBasic.Text),
++                                        ClsPricing.CalculatePriceForUnits(ParseDouble(cntStockUnit.txtPackingBasic.Text),
+                                                                           cnt.txtPrice1LC.Text, cnt.txtPrice1CC.Text,
+                                                                           "", "",
+                                                                           "", "",
+                                                                           ref Price1LL, ref Price1CC,
+                                                                           ref Price2LL, ref Price2CC,
+@@ -3384,14 +3679,14 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                                         cntStockUnit.txtDiscount.Text = cntStockUnit.txtDiscount.LastText = cnt.txtDiscount.Text;
+ 
+                                     }
+ 
+-                                    if (cntStockUnit.txtPackingBasic.LastText != cntStockUnit.txtPackingBasic.Text || ((cntStockUnit.txtP1P2Disc.AllowEmptyNumeric == true && cntStockUnit.txtP1P2Disc.Text == "") || Convert.ToDouble(cntStockUnit.txtP1P2Disc.Text) == 0))
++                                    if (cntStockUnit.txtPackingBasic.LastText != cntStockUnit.txtPackingBasic.Text || ((cntStockUnit.txtP1P2Disc.AllowEmptyNumeric == true && cntStockUnit.txtP1P2Disc.Text == "") || ParseDouble(cntStockUnit.txtP1P2Disc.Text) == 0))
+                                     {
+ 
+-                                        ClsPricing.CalculatePriceForUnits(Convert.ToDouble(cntStockUnit.txtPackingBasic.Text),
++                                        ClsPricing.CalculatePriceForUnits(ParseDouble(cntStockUnit.txtPackingBasic.Text),
+                                                                         "", "",
+                                                                         cnt.txtPrice2LC.Text, cnt.txtPrice2CC.Text,
+                                                                         "", "",
+                                                                         ref Price1LL, ref Price1CC,
+                                                                         ref Price2LL, ref Price2CC,
+@@ -3401,14 +3696,14 @@ namespace SuperStoreMain.Forms.Steps
+                                         cntStockUnit.txtPrice2CC.Text = cntStockUnit.txtPrice2CC.LastText = Price2CC;
+ 
+                                         cntStockUnit.txtP1P2Disc.Text = cntStockUnit.txtP1P2Disc.LastText = cnt.txtP1P2Disc.Text;
+                                     }
+ 
+-                                    if (cntStockUnit.txtPackingBasic.LastText != cntStockUnit.txtPackingBasic.Text || ((cntStockUnit.txtP1P3Disc.AllowEmptyNumeric == true && cntStockUnit.txtP1P3Disc.Text == "") || Convert.ToDouble(cntStockUnit.txtP1P3Disc.Text) == 0))
++                                    if (cntStockUnit.txtPackingBasic.LastText != cntStockUnit.txtPackingBasic.Text || ((cntStockUnit.txtP1P3Disc.AllowEmptyNumeric == true && cntStockUnit.txtP1P3Disc.Text == "") || ParseDouble(cntStockUnit.txtP1P3Disc.Text) == 0))
+                                     {
+ 
+-                                        ClsPricing.CalculatePriceForUnits(Convert.ToDouble(cntStockUnit.txtPackingBasic.Text),
++                                        ClsPricing.CalculatePriceForUnits(ParseDouble(cntStockUnit.txtPackingBasic.Text),
+                                                                      "", "",
+                                                                      "", "",
+                                                                      cnt.txtPrice3LC.Text, cnt.txtPrice3CC.Text,
+                                                                      ref Price1LL, ref Price1CC,
+                                                                      ref Price2LL, ref Price2CC,
+@@ -3480,15 +3775,17 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                     if (sender is cntBarcode barcodeControl)
+                     {
+                         RefocusSender(sender);
+                     }
++                    return; // one message per check (the save re-checks every barcode)
+                 }
+                 else if (BarcodeSynController.CheckBarcodeSyn(barcode, lcFormMode == ClsCommon.FormMode.Modify ? StockID : 0))
+                 { 
+                     ClsCommon.ShowNotification(this, "Barcode Already Exists");
+                     RefocusSender(sender);
++                    return;
+                 }
+ 
+ 
+                 // Check against other barcodes in all cntStockUnits
+                 foreach (cntStockUnit unit in flpStockUnits.Controls)
+@@ -3507,14 +3804,13 @@ namespace SuperStoreMain.Forms.Steps
+                         }
+                     }
+                 }
+ 
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
+-                throw;
++                ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
+         private void RefocusSender(object sender)
+         {
+@@ -3591,49 +3887,10 @@ namespace SuperStoreMain.Forms.Steps
+             {
+                 throw;
+             }
+         }
+ 
+-        double GetConversionFactor(ref DataTable dtUnits, string unit, string basicUnit)
+-        {
+-            try
+-            {
+-
+-                string currentUnit = unit?.ToUpper();
+-                double conversionFactor = 1;
+-
+-                while (dtUnits.AsEnumerable().Any(row => row.Field<string>("Unit")?.ToUpper() == currentUnit?.ToUpper()))
+-                {
+-                    var currentRow = dtUnits.AsEnumerable().First(row => row.Field<string>("Unit")?.ToUpper() == currentUnit?.ToUpper());
+-                    string parentUnit = currentRow.Field<string>("ParentUnit")?.ToUpper();
+-
+-                    double packingBasic = currentRow.Field<double>("PackingBasic");
+-
+-                    if (parentUnit?.ToUpper() == basicUnit?.ToUpper())
+-                    {
+-                        break;
+-                    }
+-
+-                    conversionFactor *= packingBasic;
+-
+-                    if (parentUnit?.ToUpper() == currentUnit?.ToUpper())
+-                    {
+-                        return 0; // Error - CR
+-                    }
+-
+-                    currentUnit = parentUnit?.ToUpper();
+-                }
+-
+-                return conversionFactor;
+-
+-            }
+-            catch (Exception)
+-            {
+-                throw;
+-            }
+-        }
+-       
+ 
+         double GetConversionFactorToBasicUnit(ref DataTable dtUnits, string unit, string basicUnit)
+         {
+             try
+             {
+@@ -3764,26 +4021,26 @@ namespace SuperStoreMain.Forms.Steps
+                 //double Price2CC = 0;
+                 //double Price3LC = 0;
+                 //double Price3CC = 0;
+ 
+ 
+-                double PriceLC = Convert.ToDouble(txtPrice1LL.Text);
+-                double PriceCC = Convert.ToDouble(txtPrice1CC.Text);
+-                double Price2LC = Convert.ToDouble(txtPrice2LL.Text);
+-                double Price2CC = Convert.ToDouble(txtPrice2CC.Text);
+-                double Price3LC = Convert.ToDouble(txtPrice3LL.Text);
+-                double Price3CC = Convert.ToDouble(txtPrice3CC.Text);
++                double PriceLC = ParseDouble(txtPrice1LL.Text);
++                double PriceCC = ParseDouble(txtPrice1CC.Text);
++                double Price2LC = ParseDouble(txtPrice2LL.Text);
++                double Price2CC = ParseDouble(txtPrice2CC.Text);
++                double Price3LC = ParseDouble(txtPrice3LL.Text);
++                double Price3CC = ParseDouble(txtPrice3CC.Text);
+ 
+                 try
+                 {
+ 
+                     ClsPricing.CalculatePrice(rbBaseCurrencyCC.Checked ? ClsConfig.gbCurr2 : ClsConfig.gbCurr1,
+                                           rbLC.Checked ? ClsConfig.gbCurr1 : rbCC.Text ,
+-                                          Convert.ToDouble(txtSalesCoefVal.Text),
+-                                          Convert.ToDouble(txtPotCostLC.Text),
+-                                          Convert.ToDouble(txtPotCostCC.Text),
+-                                          Convert.ToDouble(cntVat1.VatPerc),
++                                          ParseDouble(txtSalesCoefVal.Text),
++                                          ParseDouble(txtPotCostLC.Text),
++                                          ParseDouble(txtPotCostCC.Text),
++                                          ParseDouble(cntVat1.VatPerc),
+                                           "",
+                                           0,
+                                           0,
+                                           ref PriceLC,
+                                           ref PriceCC,
+@@ -3793,34 +4050,35 @@ namespace SuperStoreMain.Forms.Steps
+                                           ref Price3CC
+                                           );
+ 
+                     foreach (cntStockUnit cntStockUnit in flpStockUnits.Controls)
+                     {
+-                        cntStockUnit.txtPrice1LC.NumericText = Convert.ToDouble(cntStockUnit.txtPrice1LC.LastText) == 0 ? (PriceLC * Convert.ToDouble(cntStockUnit.txtPackingBasic.Text)) : Convert.ToDouble(cntStockUnit.txtPrice1LC.Text);
++                        cntStockUnit.txtPrice1LC.NumericText = ParseDouble(cntStockUnit.txtPrice1LC.LastText) == 0 ? (PriceLC * ParseDouble(cntStockUnit.txtPackingBasic.Text)) : ParseDouble(cntStockUnit.txtPrice1LC.Text);
+                         cntStockUnit.txtPrice1LC.LastText = cntStockUnit.txtPrice1LC.Text;
+-                        cntStockUnit.txtPrice1CC.NumericText = Convert.ToDouble(cntStockUnit.txtPrice1CC.LastText) == 0 ? (PriceCC * Convert.ToDouble(cntStockUnit.txtPackingBasic.Text)) : Convert.ToDouble(cntStockUnit.txtPrice1CC.Text);
++                        cntStockUnit.txtPrice1CC.NumericText = ParseDouble(cntStockUnit.txtPrice1CC.LastText) == 0 ? (PriceCC * ParseDouble(cntStockUnit.txtPackingBasic.Text)) : ParseDouble(cntStockUnit.txtPrice1CC.Text);
+                         cntStockUnit.txtPrice1CC.LastText = cntStockUnit.txtPrice1CC.Text;
+ 
+-                        cntStockUnit.txtPrice2LC.NumericText = Convert.ToDouble(cntStockUnit.txtPrice2LC.LastText) == 0 ? (Price2LC * Convert.ToDouble(cntStockUnit.txtPackingBasic.Text)) : Convert.ToDouble(cntStockUnit.txtPrice2LC.Text);
++                        cntStockUnit.txtPrice2LC.NumericText = ParseDouble(cntStockUnit.txtPrice2LC.LastText) == 0 ? (Price2LC * ParseDouble(cntStockUnit.txtPackingBasic.Text)) : ParseDouble(cntStockUnit.txtPrice2LC.Text);
+                         cntStockUnit.txtPrice2LC.LastText = cntStockUnit.txtPrice2LC.Text;
+-                        cntStockUnit.txtPrice2CC.NumericText = Convert.ToDouble(cntStockUnit.txtPrice2CC.LastText) == 0 ? (Price2CC * Convert.ToDouble(cntStockUnit.txtPackingBasic.Text)) : Convert.ToDouble(cntStockUnit.txtPrice2CC.Text);
++                        cntStockUnit.txtPrice2CC.NumericText = ParseDouble(cntStockUnit.txtPrice2CC.LastText) == 0 ? (Price2CC * ParseDouble(cntStockUnit.txtPackingBasic.Text)) : ParseDouble(cntStockUnit.txtPrice2CC.Text);
+                         cntStockUnit.txtPrice2CC.LastText = cntStockUnit.txtPrice2CC.Text;
+ 
+-                        cntStockUnit.txtPrice3LC.NumericText = Convert.ToDouble(cntStockUnit.txtPrice3LC.LastText) == 0 ? (Price3LC * Convert.ToDouble(cntStockUnit.txtPackingBasic.Text)) : Convert.ToDouble(cntStockUnit.txtPrice3LC.Text);
++                        cntStockUnit.txtPrice3LC.NumericText = ParseDouble(cntStockUnit.txtPrice3LC.LastText) == 0 ? (Price3LC * ParseDouble(cntStockUnit.txtPackingBasic.Text)) : ParseDouble(cntStockUnit.txtPrice3LC.Text);
+                         cntStockUnit.txtPrice3LC.LastText = cntStockUnit.txtPrice3LC.Text;
+-                        cntStockUnit.txtPrice3CC.NumericText = Convert.ToDouble(cntStockUnit.txtPrice3CC.LastText) == 0 ? (Price3CC * Convert.ToDouble(cntStockUnit.txtPackingBasic.Text)) : Convert.ToDouble(cntStockUnit.txtPrice3CC.Text);
++                        cntStockUnit.txtPrice3CC.NumericText = ParseDouble(cntStockUnit.txtPrice3CC.LastText) == 0 ? (Price3CC * ParseDouble(cntStockUnit.txtPackingBasic.Text)) : ParseDouble(cntStockUnit.txtPrice3CC.Text);
+                         cntStockUnit.txtPrice3CC.LastText = cntStockUnit.txtPrice3CC.Text;
+ 
+                         cntStockUnit.txtP1P2Disc.Text = cntStockUnit.txtP1P2Disc.LastText = txtDiscPrice2.Text == "" ? "0" : txtDiscPrice2.Text;
+                         cntStockUnit.txtP1P3Disc.Text = cntStockUnit.txtP1P3Disc.LastText = txtDiscPrice3.Text == "" ? "0" : txtDiscPrice3.Text;
+ 
+                     }
+ 
+                 }
+-                catch (Exception)
++                catch (Exception ex)
+                 {
+-
++                    // Was swallowed silently: units were left un-priced with no message
++                    ClsCommon.ShowException(StepName, ex);
+                 }
+ 
+                 if (txtUnitsLogging.Text.Trim() != "")
+                 {
+ 
+@@ -3835,13 +4093,13 @@ namespace SuperStoreMain.Forms.Steps
+                     }
+ 
+                 }
+ 
+             }
+-            catch (Exception)
++            catch (Exception ex)
+             {
+-
++                ClsCommon.ShowException(StepName, ex);
+             }
+ 
+         }
+ 
+         private void treeViewUnits_AfterSelect(object sender, TreeViewEventArgs e)
+@@ -3973,27 +4231,27 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                 foreach (cntStockUnit cntStockUnit in flpStockUnits.Controls)
+                 {
+                     if (cntStockUnit.chkBaseUnit.Checked)   
+                     {
+-                        if (sender != cntStockUnit.txtPrice1CC || sender != cntStockUnit.txtPrice1LC)
++                        if (sender != cntStockUnit.txtPrice1CC && sender != cntStockUnit.txtPrice1LC)
+                         {
+                             if (rbBaseCurrencyLC.Checked)
+                             {
+                                 if (sender == cntStockUnit.txtPrice2LC &&
+                                     cntStockUnit.txtPrice2LC.Enabled == true &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) != 0 &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2LC.LastText))
++                                    ParseDouble(cntStockUnit.txtPrice2LC.Text) != 0 &&
++                                    ParseDouble(cntStockUnit.txtPrice2LC.Text) != ParseDouble(cntStockUnit.txtPrice2LC.LastText))
+                                 {
+ 
+                                     if (cntStockUnit.txtP1P2Disc.AllowEmptyNumeric && cntStockUnit.txtP1P2Disc.Text == "")
+                                     {
+                                         cntStockUnit.txtP1P2Disc.LastText = "";
+                                         cntStockUnit.txtPrice2LC.Text = txtPrice2LL.Text;
+                                         cntStockUnit.txtPrice2CC.Text = txtPrice2CC.Text;
+                                     }
+-                                    else if (Convert.ToDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
++                                    else if (ParseDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
+                                     {
+ 
+                                         //ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice2LL.Text, cntStockUnit.txtPrice2LC.Text, txtPrice2CC.Text, ref discount, ref Price);
+ 
+                                         ClsPricing.CalculateDiscountAfterChangingPrice(
+@@ -4009,20 +4267,20 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                                 }
+ 
+                                 if (sender == cntStockUnit.txtPrice3LC &&
+                                     cntStockUnit.txtPrice3LC.Enabled == true &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) != 0 &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3LC.LastText))
++                                    ParseDouble(cntStockUnit.txtPrice3LC.Text) != 0 &&
++                                    ParseDouble(cntStockUnit.txtPrice3LC.Text) != ParseDouble(cntStockUnit.txtPrice3LC.LastText))
+                                 {
+                                     if (cntStockUnit.txtP1P3Disc.AllowEmptyNumeric && cntStockUnit.txtP1P3Disc.Text == "")
+                                     {
+                                         cntStockUnit.txtP1P3Disc.LastText = "";
+                                         cntStockUnit.txtPrice3LC.Text = txtPrice3LL.Text;
+                                         cntStockUnit.txtPrice3CC.Text = txtPrice3CC.Text;
+                                     }
+-                                    else if (Convert.ToDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
++                                    else if (ParseDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
+                                     {
+ 
+                                         //ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice3LL.Text, cntStockUnit.txtPrice3LC.Text, txtPrice3CC.Text, ref discount, ref Price);
+ 
+                                         ClsPricing.CalculateDiscountAfterChangingPrice(
+@@ -4041,20 +4299,20 @@ namespace SuperStoreMain.Forms.Steps
+                             }
+                             else
+                             {
+                                 if (sender == cntStockUnit.txtPrice2CC &&
+                                     cntStockUnit.txtPrice2CC.Enabled == true &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) != 0 &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2CC.LastText))
++                                    ParseDouble(cntStockUnit.txtPrice2CC.Text) != 0 &&
++                                    ParseDouble(cntStockUnit.txtPrice2CC.Text) != ParseDouble(cntStockUnit.txtPrice2CC.LastText))
+                                 {
+                                     if (cntStockUnit.txtP1P2Disc.AllowEmptyNumeric && cntStockUnit.txtP1P2Disc.Text == "")
+                                     {
+                                         cntStockUnit.txtP1P2Disc.LastText = "";
+                                         cntStockUnit.txtPrice2LC.Text = txtPrice2LL.Text;
+                                         cntStockUnit.txtPrice2CC.Text = txtPrice2CC.Text;
+                                     }
+-                                    else if (Convert.ToDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
++                                    else if (ParseDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
+                                     {
+                                         //ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice2CC.Text, cntStockUnit.txtPrice2CC.Text, txtPrice2LL.Text, ref discount, ref Price);
+ 
+                                         ClsPricing.CalculateDiscountAfterChangingPrice(
+                                                                           cntStockUnit.txtPrice2CC.LastText,
+@@ -4069,21 +4327,21 @@ namespace SuperStoreMain.Forms.Steps
+                                 }
+ 
+ 
+                                 if (sender == cntStockUnit.txtPrice3CC &&
+                                     cntStockUnit.txtPrice3CC.Enabled == true &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) != 0 &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3CC.LastText))
++                                    ParseDouble(cntStockUnit.txtPrice3CC.Text) != 0 &&
++                                    ParseDouble(cntStockUnit.txtPrice3CC.Text) != ParseDouble(cntStockUnit.txtPrice3CC.LastText))
+                                 {
+ 
+                                     if (cntStockUnit.txtP1P3Disc.AllowEmptyNumeric && cntStockUnit.txtP1P3Disc.Text == "")
+                                     {
+                                         cntStockUnit.txtP1P3Disc.LastText = "";
+                                         cntStockUnit.txtPrice3LC.Text = txtPrice3LL.Text;
+                                         cntStockUnit.txtPrice3CC.Text = txtPrice3CC.Text;
+                                     }
+-                                    else if (Convert.ToDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
++                                    else if (ParseDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
+                                     {
+                                         //ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice3CC.Text, cntStockUnit.txtPrice3CC.Text, txtPrice3LL.Text, ref discount, ref Price);
+ 
+                                         ClsPricing.CalculateDiscountAfterChangingPrice(
+                                                                           cntStockUnit.txtPrice3CC.LastText,
+@@ -4104,74 +4362,74 @@ namespace SuperStoreMain.Forms.Steps
+                         }
+ 
+                         string Operator = "";
+                         double Rate = -1;
+ 
+-                        ClsCom.GetRate(ClsConfig.gbCurr2, DateTime.Today.ToString(), "LC", ref Operator, ref Rate, ClsConfig.locationDirectives.Ld_POSRate);
++                        ClsCom.GetRate(ClsConfig.gbCurr2, RateDate, "LC", ref Operator, ref Rate, ClsConfig.locationDirectives.Ld_POSRate);
+ 
+                         if (sender == cntStockUnit.txtPrice1LC || sender == cntStockUnit.txtPrice2LC || sender == cntStockUnit.txtPrice3LC)
+                         {
+                             if (Operator != "" && Rate != -1)
+                             {
+                                 if (Operator == "*")
+                                 {
+-                                    if (sender == cntStockUnit.txtPrice1LC && Convert.ToDouble(cntStockUnit.txtPrice1LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1LC.LastText))
++                                    if (sender == cntStockUnit.txtPrice1LC && ParseDouble(cntStockUnit.txtPrice1LC.Text) != ParseDouble(cntStockUnit.txtPrice1LC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice1CC.Text = cntStockUnit.txtPrice1CC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice1LC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                        cntStockUnit.txtPrice1CC.Text = cntStockUnit.txtPrice1CC.LastText = (ParseDouble(cntStockUnit.txtPrice1LC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                         cntStockUnit.txtPrice1LC.LastText = cntStockUnit.txtPrice1LC.Text;
+                                         ValidateUnits();
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice2LC && Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2LC.LastText))
++                                    if (sender == cntStockUnit.txtPrice2LC && ParseDouble(cntStockUnit.txtPrice2LC.Text) != ParseDouble(cntStockUnit.txtPrice2LC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice2CC.Text = cntStockUnit.txtPrice2CC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                        cntStockUnit.txtPrice2CC.Text = cntStockUnit.txtPrice2CC.LastText = (ParseDouble(cntStockUnit.txtPrice2LC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                         cntStockUnit.txtPrice2LC.LastText = cntStockUnit.txtPrice2LC.Text;
+                                         ValidateUnits();
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice3LC && Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3LC.LastText))
++                                    if (sender == cntStockUnit.txtPrice3LC && ParseDouble(cntStockUnit.txtPrice3LC.Text) != ParseDouble(cntStockUnit.txtPrice3LC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice3CC.Text = cntStockUnit.txtPrice3CC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                        cntStockUnit.txtPrice3CC.Text = cntStockUnit.txtPrice3CC.LastText = (ParseDouble(cntStockUnit.txtPrice3LC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                         cntStockUnit.txtPrice3LC.LastText = cntStockUnit.txtPrice3LC.Text;
+                                         ValidateUnits();
+                                     }
+                                 }
+                                 else
+                                 {
+-                                    if (sender == cntStockUnit.txtPrice1LC && Convert.ToDouble(cntStockUnit.txtPrice1LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1LC.LastText))
++                                    if (sender == cntStockUnit.txtPrice1LC && ParseDouble(cntStockUnit.txtPrice1LC.Text) != ParseDouble(cntStockUnit.txtPrice1LC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice1CC.Text = cntStockUnit.txtPrice1CC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice1LC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                        cntStockUnit.txtPrice1CC.Text = cntStockUnit.txtPrice1CC.LastText = (ParseDouble(cntStockUnit.txtPrice1LC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                         cntStockUnit.txtPrice1LC.LastText = cntStockUnit.txtPrice1LC.Text;
+                                         ValidateUnits();
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice2LC && Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2LC.LastText))
++                                    if (sender == cntStockUnit.txtPrice2LC && ParseDouble(cntStockUnit.txtPrice2LC.Text) != ParseDouble(cntStockUnit.txtPrice2LC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice2CC.Text = cntStockUnit.txtPrice2CC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                        cntStockUnit.txtPrice2CC.Text = cntStockUnit.txtPrice2CC.LastText = (ParseDouble(cntStockUnit.txtPrice2LC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                         cntStockUnit.txtPrice2LC.LastText = cntStockUnit.txtPrice2LC.Text;
+                                         ValidateUnits();
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice3LC && Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3LC.LastText))
++                                    if (sender == cntStockUnit.txtPrice3LC && ParseDouble(cntStockUnit.txtPrice3LC.Text) != ParseDouble(cntStockUnit.txtPrice3LC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice3CC.Text = cntStockUnit.txtPrice3CC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++                                        cntStockUnit.txtPrice3CC.Text = cntStockUnit.txtPrice3CC.LastText = (ParseDouble(cntStockUnit.txtPrice3LC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                         cntStockUnit.txtPrice3LC.LastText = cntStockUnit.txtPrice3LC.Text;
+                                         ValidateUnits();
+                                     }
+                                 }
+                             }
+                             else
+                             {
+-                                if (sender == cntStockUnit.txtPrice1LC && Convert.ToDouble(cntStockUnit.txtPrice1LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1LC.LastText))
++                                if (sender == cntStockUnit.txtPrice1LC && ParseDouble(cntStockUnit.txtPrice1LC.Text) != ParseDouble(cntStockUnit.txtPrice1LC.LastText))
+                                 {
+                                     cntStockUnit.txtPrice1CC.Text = cntStockUnit.txtPrice1CC.LastText = 0.ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                     cntStockUnit.txtPrice1LC.LastText = cntStockUnit.txtPrice1LC.Text;
+                                     ValidateUnits();
+                                 }
+-                                if (sender == cntStockUnit.txtPrice2LC && Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2LC.LastText))
++                                if (sender == cntStockUnit.txtPrice2LC && ParseDouble(cntStockUnit.txtPrice2LC.Text) != ParseDouble(cntStockUnit.txtPrice2LC.LastText))
+                                 {
+                                     cntStockUnit.txtPrice2CC.Text = cntStockUnit.txtPrice2CC.LastText = 0.ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                     cntStockUnit.txtPrice2LC.LastText = cntStockUnit.txtPrice2LC.Text;
+                                     ValidateUnits();
+                                 }
+-                                if (sender == cntStockUnit.txtPrice3LC && Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3LC.LastText))
++                                if (sender == cntStockUnit.txtPrice3LC && ParseDouble(cntStockUnit.txtPrice3LC.Text) != ParseDouble(cntStockUnit.txtPrice3LC.LastText))
+                                 {
+                                     cntStockUnit.txtPrice3CC.Text = cntStockUnit.txtPrice3CC.LastText = 0.ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                                     cntStockUnit.txtPrice3LC.LastText = cntStockUnit.txtPrice3LC.Text;
+                                     ValidateUnits();
+                                 }
+@@ -4183,67 +4441,67 @@ namespace SuperStoreMain.Forms.Steps
+                         {
+                             if (Operator != "" && Rate != -1)
+                             {
+                                 if (Operator == "*")
+                                 {
+-                                    if (sender == cntStockUnit.txtPrice1CC && Convert.ToDouble(cntStockUnit.txtPrice1CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1CC.LastText))
++                                    if (sender == cntStockUnit.txtPrice1CC && ParseDouble(cntStockUnit.txtPrice1CC.Text) != ParseDouble(cntStockUnit.txtPrice1CC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice1LC.Text = cntStockUnit.txtPrice1LC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice1CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                        cntStockUnit.txtPrice1LC.Text = cntStockUnit.txtPrice1LC.LastText = (ParseDouble(cntStockUnit.txtPrice1CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                         cntStockUnit.txtPrice1CC.LastText = cntStockUnit.txtPrice1CC.Text;
+                                         ValidateUnits();
+ 
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice2CC && Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2CC.LastText))
++                                    if (sender == cntStockUnit.txtPrice2CC && ParseDouble(cntStockUnit.txtPrice2CC.Text) != ParseDouble(cntStockUnit.txtPrice2CC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice2LC.Text = cntStockUnit.txtPrice2LC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                        cntStockUnit.txtPrice2LC.Text = cntStockUnit.txtPrice2LC.LastText = (ParseDouble(cntStockUnit.txtPrice2CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                         cntStockUnit.txtPrice2CC.LastText = cntStockUnit.txtPrice2CC.Text;
+                                         ValidateUnits();
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice3CC && Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3CC.LastText))
++                                    if (sender == cntStockUnit.txtPrice3CC && ParseDouble(cntStockUnit.txtPrice3CC.Text) != ParseDouble(cntStockUnit.txtPrice3CC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice3LC.Text = cntStockUnit.txtPrice3LC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                        cntStockUnit.txtPrice3LC.Text = cntStockUnit.txtPrice3LC.LastText = (ParseDouble(cntStockUnit.txtPrice3CC.Text) * Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                         cntStockUnit.txtPrice3CC.LastText = cntStockUnit.txtPrice3CC.Text;
+                                         ValidateUnits();
+                                     }
+                                 }
+                                 else
+                                 {
+-                                    if (sender == cntStockUnit.txtPrice1CC && Convert.ToDouble(cntStockUnit.txtPrice1CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1CC.LastText))
++                                    if (sender == cntStockUnit.txtPrice1CC && ParseDouble(cntStockUnit.txtPrice1CC.Text) != ParseDouble(cntStockUnit.txtPrice1CC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice1LC.Text = cntStockUnit.txtPrice1LC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice1CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                        cntStockUnit.txtPrice1LC.Text = cntStockUnit.txtPrice1LC.LastText = (ParseDouble(cntStockUnit.txtPrice1CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                         cntStockUnit.txtPrice1CC.LastText = cntStockUnit.txtPrice1CC.Text;
+                                         ValidateUnits();
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice2CC && Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2CC.LastText))
++                                    if (sender == cntStockUnit.txtPrice2CC && ParseDouble(cntStockUnit.txtPrice2CC.Text) != ParseDouble(cntStockUnit.txtPrice2CC.LastText))
+                                     {
+-                                        cntStockUnit.txtPrice2LC.Text = cntStockUnit.txtPrice2LC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                        cntStockUnit.txtPrice2LC.Text = cntStockUnit.txtPrice2LC.LastText = (ParseDouble(cntStockUnit.txtPrice2CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                         cntStockUnit.txtPrice2CC.LastText = cntStockUnit.txtPrice2CC.Text;
+                                         ValidateUnits();
+                                     }
+-                                    if (sender == cntStockUnit.txtPrice3CC && Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3CC.LastText))
++                                    if (sender == cntStockUnit.txtPrice3CC && ParseDouble(cntStockUnit.txtPrice3CC.Text) != ParseDouble(cntStockUnit.txtPrice3CC.LastText))
+                                     {   
+-                                        cntStockUnit.txtPrice3LC.Text = cntStockUnit.txtPrice3LC.LastText = (Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++                                        cntStockUnit.txtPrice3LC.Text = cntStockUnit.txtPrice3LC.LastText = (ParseDouble(cntStockUnit.txtPrice3CC.Text) / Rate).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                         cntStockUnit.txtPrice3CC.LastText = cntStockUnit.txtPrice3CC.Text;
+                                         ValidateUnits();
+                                     }
+                                 }
+                             }
+                             else
+                             {
+-                                if (sender == cntStockUnit.txtPrice1CC && Convert.ToDouble(cntStockUnit.txtPrice1CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1CC.LastText))
++                                if (sender == cntStockUnit.txtPrice1CC && ParseDouble(cntStockUnit.txtPrice1CC.Text) != ParseDouble(cntStockUnit.txtPrice1CC.LastText))
+                                 {
+                                     cntStockUnit.txtPrice1LC.Text = cntStockUnit.txtPrice1LC.LastText = 0.ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                     cntStockUnit.txtPrice1CC.LastText = cntStockUnit.txtPrice1CC.Text;
+                                     ValidateUnits();
+                                 }
+-                                if (sender == cntStockUnit.txtPrice2CC && Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2CC.LastText))
++                                if (sender == cntStockUnit.txtPrice2CC && ParseDouble(cntStockUnit.txtPrice2CC.Text) != ParseDouble(cntStockUnit.txtPrice2CC.LastText))
+                                 {
+                                     cntStockUnit.txtPrice2LC.Text = cntStockUnit.txtPrice2LC.LastText = 0.ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                     cntStockUnit.txtPrice2CC.LastText = cntStockUnit.txtPrice2CC.Text;
+                                     ValidateUnits();
+                                 }
+-                                if (sender == cntStockUnit.txtPrice3CC && Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3CC.LastText))
++                                if (sender == cntStockUnit.txtPrice3CC && ParseDouble(cntStockUnit.txtPrice3CC.Text) != ParseDouble(cntStockUnit.txtPrice3CC.LastText))
+                                 {
+                                     cntStockUnit.txtPrice3LC.Text = cntStockUnit.txtPrice3LC.LastText = 0.ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                                     cntStockUnit.txtPrice3CC.LastText = cntStockUnit.txtPrice3CC.Text;
+                                     ValidateUnits();
+                                 }
+@@ -4266,24 +4524,28 @@ namespace SuperStoreMain.Forms.Steps
+                     {
+                         if (rbBaseCurrencyLC.Checked)
+                         {
+                             if (sender == cntStockUnit.txtPrice1LC &&
+                                     cntStockUnit.txtPrice1LC.Enabled == true &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice1LC.Text) != 0 &&
+-                                    Convert.ToDouble(cntStockUnit.txtPrice1LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1LC.LastText))
++                                    ParseDouble(cntStockUnit.txtPrice1LC.Text) != 0 &&
++                                    ParseDouble(cntStockUnit.txtPrice1LC.Text) != ParseDouble(cntStockUnit.txtPrice1LC.LastText))
+                             {
+ 
+                                 if (cntStockUnit.txtDiscount.AllowEmptyNumeric && cntStockUnit.txtDiscount.Text == "")
+                                 {
+                                     cntStockUnit.txtDiscount.LastText = "";
+-                                    cntStockUnit.txtPrice1LC.Text = txtPrice1LL.Text;
+-                                    cntStockUnit.txtPrice1CC.Text = txtPrice1CC.Text;
++                                    ResetUnitPriceFromHeader(cntStockUnit, cntStockUnit.txtPrice1LC, cntStockUnit.txtPrice1CC, txtPrice1LL, txtPrice1CC);
+                                 }
+-                                else if (Convert.ToDouble(cntStockUnit.txtDiscount.Text) != 0 && double.TryParse(cntStockUnit.txtDiscount.Text, out double result))
++                                else if (ParseDouble(cntStockUnit.txtDiscount.Text) != 0 && double.TryParse(cntStockUnit.txtDiscount.Text, out double result))
+                                 {
+ 
+-                                    ClsPricing.CalculateDiscountAfterChangingPrice(txtPrice1LL.Text, cntStockUnit.txtPrice1LC.Text, txtPrice1CC.Text, ref discount, ref Price);
++                                    // Same arguments as the CC branch below: this call compared with the base-unit header price
++                                    // (no packing) and passed no old discount, so it always threw
++                                    ClsPricing.CalculateDiscountAfterChangingPrice(
++                                                                                   cntStockUnit.txtPrice1LC.LastText,
++                                                                                   cntStockUnit.txtPrice1LC.Text,
++                                                                                   cntStockUnit.txtPrice1CC.LastText, ref discount, ref Price, cntStockUnit.txtDiscount.Text);
+ 
+ 
+                                     cntStockUnit.txtDiscount.Text = discount;
+                                     cntStockUnit.txtDiscount.LastText = cntStockUnit.txtDiscount.Text;
+                                     cntStockUnit.txtPrice1CC.Text = Price.ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+@@ -4292,21 +4554,20 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                             }
+ 
+                             if (sender == cntStockUnit.txtPrice2LC &&
+                                    cntStockUnit.txtPrice2LC.Enabled == true &&
+-                                   Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) != 0 &&
+-                                   Convert.ToDouble(cntStockUnit.txtPrice2LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2LC.LastText))
++                                   ParseDouble(cntStockUnit.txtPrice2LC.Text) != 0 &&
++                                   ParseDouble(cntStockUnit.txtPrice2LC.Text) != ParseDouble(cntStockUnit.txtPrice2LC.LastText))
+                             {
+ 
+                                 if (cntStockUnit.txtP1P2Disc.AllowEmptyNumeric && cntStockUnit.txtP1P2Disc.Text == "")
+                                 {
+                                     cntStockUnit.txtP1P2Disc.LastText = "";
+-                                    cntStockUnit.txtPrice2LC.Text = txtPrice2LL.Text;
+-                                    cntStockUnit.txtPrice2CC.Text = txtPrice2CC.Text;
++                                    ResetUnitPriceFromHeader(cntStockUnit, cntStockUnit.txtPrice2LC, cntStockUnit.txtPrice2CC, txtPrice2LL, txtPrice2CC);
+                                 }
+-                                else if (Convert.ToDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
++                                else if (ParseDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
+                                 {
+ 
+                                     //ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice2LL.Text, cntStockUnit.txtPrice2LC.Text, txtPrice2CC.Text, ref discount, ref Price);
+ 
+                                     ClsPricing.CalculateDiscountAfterChangingPrice(
+@@ -4322,20 +4583,19 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                             }
+                             
+                             if (sender == cntStockUnit.txtPrice3LC &&
+                                 cntStockUnit.txtPrice3LC.Enabled == true &&
+-                                Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) != 0 &&
+-                                Convert.ToDouble(cntStockUnit.txtPrice3LC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3LC.LastText))
++                                ParseDouble(cntStockUnit.txtPrice3LC.Text) != 0 &&
++                                ParseDouble(cntStockUnit.txtPrice3LC.Text) != ParseDouble(cntStockUnit.txtPrice3LC.LastText))
+                             {
+                                 if (cntStockUnit.txtP1P3Disc.AllowEmptyNumeric && cntStockUnit.txtP1P3Disc.Text == "")
+                                 {
+                                     cntStockUnit.txtP1P3Disc.LastText = "";
+-                                    cntStockUnit.txtPrice3LC.Text = txtPrice3LL.Text;
+-                                    cntStockUnit.txtPrice3CC.Text = txtPrice3CC.Text;
++                                    ResetUnitPriceFromHeader(cntStockUnit, cntStockUnit.txtPrice3LC, cntStockUnit.txtPrice3CC, txtPrice3LL, txtPrice3CC);
+                                 }
+-                                else if (Convert.ToDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
++                                else if (ParseDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
+                                 {
+                                     // ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice3LL.Text, cntStockUnit.txtPrice3LC.Text, txtPrice3CC.Text, ref discount, ref Price);
+ 
+ 
+                                     ClsPricing.CalculateDiscountAfterChangingPrice(
+@@ -4354,20 +4614,19 @@ namespace SuperStoreMain.Forms.Steps
+                         else
+                         {
+ 
+                             if (sender == cntStockUnit.txtPrice1CC &&
+                                   cntStockUnit.txtPrice1CC.Enabled == true &&
+-                                  Convert.ToDouble(cntStockUnit.txtPrice1CC.Text) != 0 &&
+-                                  Convert.ToDouble(cntStockUnit.txtPrice1CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice1CC.LastText))
++                                  ParseDouble(cntStockUnit.txtPrice1CC.Text) != 0 &&
++                                  ParseDouble(cntStockUnit.txtPrice1CC.Text) != ParseDouble(cntStockUnit.txtPrice1CC.LastText))
+                             {
+                                 if (cntStockUnit.txtDiscount.AllowEmptyNumeric && cntStockUnit.txtDiscount.Text == "")
+                                 {
+                                     cntStockUnit.txtDiscount.LastText = "";
+-                                    cntStockUnit.txtPrice1LC.Text = txtPrice1LL.Text;
+-                                    cntStockUnit.txtPrice1CC.Text = txtPrice1CC.Text;
++                                    ResetUnitPriceFromHeader(cntStockUnit, cntStockUnit.txtPrice1LC, cntStockUnit.txtPrice1CC, txtPrice1LL, txtPrice1CC);
+                                 }
+-                                else if (Convert.ToDouble(cntStockUnit.txtDiscount.Text) != 0 && double.TryParse(cntStockUnit.txtDiscount.Text, out double result))
++                                else if (ParseDouble(cntStockUnit.txtDiscount.Text) != 0 && double.TryParse(cntStockUnit.txtDiscount.Text, out double result))
+                                 {
+                                     ClsPricing.CalculateDiscountAfterChangingPrice(
+                                                                                    cntStockUnit.txtPrice1CC.LastText,
+                                                                                    cntStockUnit.txtPrice1CC.Text,
+                                                                                    cntStockUnit.txtPrice1LC.LastText, ref discount, ref Price, cntStockUnit.txtDiscount.Text);
+@@ -4379,20 +4638,19 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                             }
+ 
+                             if (sender == cntStockUnit.txtPrice2CC &&
+                                    cntStockUnit.txtPrice2CC.Enabled == true &&
+-                                   Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) != 0 &&
+-                                   Convert.ToDouble(cntStockUnit.txtPrice2CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice2CC.LastText))
++                                   ParseDouble(cntStockUnit.txtPrice2CC.Text) != 0 &&
++                                   ParseDouble(cntStockUnit.txtPrice2CC.Text) != ParseDouble(cntStockUnit.txtPrice2CC.LastText))
+                             {
+                                 if (cntStockUnit.txtP1P2Disc.AllowEmptyNumeric && cntStockUnit.txtP1P2Disc.Text == "")
+                                 {
+                                     cntStockUnit.txtP1P2Disc.LastText = "";
+-                                    cntStockUnit.txtPrice2LC.Text = txtPrice2LL.Text;
+-                                    cntStockUnit.txtPrice2CC.Text = txtPrice2CC.Text;
++                                    ResetUnitPriceFromHeader(cntStockUnit, cntStockUnit.txtPrice2LC, cntStockUnit.txtPrice2CC, txtPrice2LL, txtPrice2CC);
+                                 }
+-                                else if (Convert.ToDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
++                                else if (ParseDouble(cntStockUnit.txtP1P2Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P2Disc.Text, out double result))
+                                 {
+ 
+                                     //ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice2CC.Text, cntStockUnit.txtPrice2CC.Text, txtPrice2LL.Text, ref discount, ref Price);
+ 
+                                     ClsPricing.CalculateDiscountAfterChangingPrice(
+@@ -4408,21 +4666,20 @@ namespace SuperStoreMain.Forms.Steps
+                             }
+ 
+ 
+                             if (sender == cntStockUnit.txtPrice3CC &&
+                                 cntStockUnit.txtPrice3CC.Enabled == true &&
+-                                Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) != 0 &&
+-                                Convert.ToDouble(cntStockUnit.txtPrice3CC.Text) != Convert.ToDouble(cntStockUnit.txtPrice3CC.LastText))
++                                ParseDouble(cntStockUnit.txtPrice3CC.Text) != 0 &&
++                                ParseDouble(cntStockUnit.txtPrice3CC.Text) != ParseDouble(cntStockUnit.txtPrice3CC.LastText))
+                             {
+ 
+                                 if (cntStockUnit.txtP1P3Disc.AllowEmptyNumeric && cntStockUnit.txtP1P3Disc.Text == "")
+                                 {
+                                     cntStockUnit.txtP1P3Disc.LastText = "";
+-                                    cntStockUnit.txtPrice3LC.Text = txtPrice3LL.Text;
+-                                    cntStockUnit.txtPrice3CC.Text = txtPrice3CC.Text;
++                                    ResetUnitPriceFromHeader(cntStockUnit, cntStockUnit.txtPrice3LC, cntStockUnit.txtPrice3CC, txtPrice3LL, txtPrice3CC);
+                                 }
+-                                else if (Convert.ToDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
++                                else if (ParseDouble(cntStockUnit.txtP1P3Disc.Text) != 0 && double.TryParse(cntStockUnit.txtP1P3Disc.Text, out double result))
+                                 {
+                                     //ClsPricing.CalculateDiscountAfterChangingPrice(cntStockUnit.txtPacking.Text, txtPrice3CC.Text, cntStockUnit.txtPrice3CC.Text, txtPrice3LL.Text, ref discount, ref Price);
+ 
+                                     ClsPricing.CalculateDiscountAfterChangingPrice(
+                                                                                   cntStockUnit.txtPrice3CC.LastText,
+@@ -4446,21 +4703,31 @@ namespace SuperStoreMain.Forms.Steps
+ 
+                 ClsCommon.ShowException(StepName, ex);
+             }
+         }
+ 
++        // Empty discount: the unit follows the header price, which is per base unit, so multiply by the unit's packing
++        // (it used to copy the header price as is: a box of 12 got the single-piece price)
++        private void ResetUnitPriceFromHeader(cntStockUnit unit, Control unitPriceLC, Control unitPriceCC, Control headerPriceLC, Control headerPriceCC)
++        {
++            double packing = string.IsNullOrWhiteSpace(unit.txtPackingBasic.Text) ? 1 : ParseDouble(unit.txtPackingBasic.Text);
++
++            unitPriceLC.Text = (ParseDouble(headerPriceLC.Text) * packing).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
++            unitPriceCC.Text = (ParseDouble(headerPriceCC.Text) * packing).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
++        }
++
+         private void CalculatePriceForUnit()
+         {
+             try
+             {
+                 if (lcFormMode != ClsCommon.FormMode.Add)
+                 {
+                     return;
+                 }
+ 
+                 if (flpStockUnits.Controls.Count != 0
+-                      ||
++                      &&
+                   Array.FindAll(flpStockUnits.Controls.Cast<Control>().OfType<cntStockUnit>().ToArray(),
+                        cnt => !cnt.Delete && !string.IsNullOrEmpty(cnt.cntUnit.txtCode.Text) && !string.IsNullOrEmpty(cnt.cntParentUnit.txtCode.Text)).Length != 0)
+ 
+                 {
+                     foreach (cntStockUnit cnt in flpStockUnits.Controls)
+@@ -4474,11 +4741,11 @@ namespace SuperStoreMain.Forms.Steps
+                             Price3LL = cnt.txtPrice3LC.Text;
+                             Price1CC = cnt.txtPrice1CC.Text;
+                             Price2CC = cnt.txtPrice2CC.Text;
+                             Price3CC = cnt.txtPrice3CC.Text;
+ 
+-                            ClsPricing.CalculatePriceForUnits(Convert.ToDouble(cnt.txtPackingBasic.Text),
++                            ClsPricing.CalculatePriceForUnits(ParseDouble(cnt.txtPackingBasic.Text),
+                                                               txtPrice1LL.Text, txtPrice1CC.Text,
+                                                               txtPrice2LL.Text, txtPrice2CC.Text,
+                                                               txtPrice3LL.Text, txtPrice3CC.Text,
+                                                               ref Price1LL, ref Price1CC,
+                                                               ref Price2LL, ref Price2CC,
+@@ -4519,22 +4786,20 @@ namespace SuperStoreMain.Forms.Steps
+                 if (pctItemPic.Image != null)
+                 {
+ 
+                     string tempFileName = $"tempFileSI{Name}_{DateTime.Now.ToString("ddMMyyyyHHmmss")}.png";
+ 
+-                    try
+-                    {
+-                        System.IO.Directory.Delete(tempFileName);
+-                    }
+-                    catch (Exception)
++                    // Remove the previous preview (Directory.Delete on a bare file name never deleted anything); the last one is removed on close
++                    if (LastItemPicTempFile != "")
+                     {
+-                        //No Exp
++                        try { File.Delete(LastItemPicTempFile); } catch (Exception) { /* still open in the viewer */ }
+                     }
+ 
+                     string tempFilePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), tempFileName);
+ 
+                     pctItemPic.Image.Save(tempFilePath, System.Drawing.Imaging.ImageFormat.Png);
++                    LastItemPicTempFile = tempFilePath;
+ 
+                     Process.Start(new ProcessStartInfo
+                     {
+                         FileName = tempFilePath,
+                         UseShellExecute = true

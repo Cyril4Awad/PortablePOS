@@ -1,0 +1,118 @@
+strsql = $" DECLARE @LocationCode AS VARCHAR(2);
+                            SET @LocationCode = '{LocCode.Trim.Replace("'", "''")}';
+
+                            DECLARE @LocalCurrency AS VARCHAR(3);
+                            DECLARE @ControlCurrency AS VARCHAR(3);
+                            DECLARE @Comp AS VARCHAR(2);
+                            DECLARE @Year AS VARCHAR(4);
+
+                            SELECT TOP 1
+                                    @Comp = Ac_Comp,
+		                            @Year = Ac_Year,
+                                    @LocalCurrency = Ac_Curr1 ,
+                                    @ControlCurrency = Ac_Curr2
+                            FROM    Com_AppComp
+                            WHERE Ac_Code = 'POSO'
+                              AND Ac_Comp = '{ConfigurationManager.AppSettings("CompCode").ToString.Trim.Replace("'", "''")}'
+                            ORDER BY Ac_EndDate DESC;
+
+                            SELECT  ItemRecId ,
+                                    ItemDescription , 
+                                    CASE WHEN RecalculateLCBasedOnCC = 'Y'
+                                         THEN FORMAT(PriceControlCurrency, 'N2')
+                                         ELSE FORMAT(PriceLocalCurrency, 'N0')
+                                    END ItemUnitPrice ,
+                                    CASE WHEN RecalculateLCBasedOnCC = 'Y' THEN '{ConfigurationManager.AppSettings("ControlCurrencyDisplay").ToString.Trim.Replace("'", "''")}'
+                                         ELSE '{ConfigurationManager.AppSettings("LocalCurrencyDisplay").ToString.Trim.Replace("'", "''")}'
+                                    END ItemCurrency , "
+
+
+                strsql &= $"    FORMAT(CASE WHEN RecalculateLCBasedOnCC = 'Y'
+                                                THEN dbo.convert5('POSO', @Comp, @Year, PriceControlCurrency, @ControlCurrency, @LocalCurrency, WorkingDate)
+                                                ELSE PriceLocalCurrency
+                                           END, 'N0') ItemUnitPriceLC ,
+                                    '{ConfigurationManager.AppSettings("LocalCurrencyDisplay").ToString.Trim.Replace("'", "''")}' LCCurrency ,
+                                    FORMAT(dbo.convert5('POSO', @Comp, @Year, 1.000, @ControlCurrency, @LocalCurrency, WorkingDate), 'N0') RateLC , "
+
+
+                strsql &= $"        ItemVATType
+                            FROM    ( SELECT    STK_RECID ItemRecId ,
+                                                STK_DESC ItemDescription ,
+                                                ISNULL(CASE WHEN Loc_Vat = 'N'
+                                                                 OR STK_VATTYPE = 'N'
+                                                                 OR Loc_VATRetType = 'A'
+                                                            THEN SP_LCTAXEX
+                                                                 - CASE WHEN SP_DISCDATE >= WorkingDate
+                                                                        THEN ( SP_LCTAXEX * SP_DISC )
+                                                                             / 100
+                                                                        ELSE 0
+                                                                   END
+                                                            ELSE SP_LCTTC
+                                                                 - CASE WHEN SP_DISCDATE >= WorkingDate
+                                                                        THEN ( SP_LCTTC * SP_DISC ) / 100
+                                                                        ELSE 0
+                                                                   END
+                                                       END, 0) PriceLocalCurrency ,
+                                                ISNULL(CASE WHEN Loc_Vat = 'N'
+                                                                 OR STK_VATTYPE = 'N'
+                                                                 OR Loc_VATRetType = 'A'
+                                                            THEN SP_FCTAXEX
+                                                                 - CASE WHEN SP_DISCDATE >= WorkingDate
+                                                                        THEN ( SP_FCTAXEX * SP_DISC )
+                                                                             / 100
+                                                                        ELSE 0
+                                                                   END
+                                                            ELSE SP_FCTTC
+                                                                 - CASE WHEN SP_DISCDATE >= WorkingDate
+                                                                        THEN ( SP_FCTTC * SP_DISC ) / 100
+                                                                        ELSE 0
+                                                                   END
+                                                       END, 0) PriceControlCurrency ,
+                                                CASE WHEN Loc_Vat = 'N'
+                                                          OR STK_VATTYPE = 'N'
+                                                          OR Loc_VATRetType = 'A' THEN 'Exempt'
+                                                     ELSE 'TTC'
+                                                END ItemVATType ,
+                                                CASE WHEN ISNULL(OP_LCBasedOnCC, 'N') = 'Y'
+                                                          AND ISNULL(NULLIF(STK_RecalculateLC, ''), 'Y') = 'Y'
+                                                     THEN 'Y'
+                                                     ELSE 'N'
+                                                END RecalculateLCBasedOnCC ,
+                                                WorkingDate 
+                                      FROM      dbo.Stk04_stkprices
+                                                INNER JOIN ( SELECT STK_RECID ,
+                                                                    STK_DESC ,
+                                                                    STK_VATTYPE ,
+                                                                    STK_RecalculateLC
+                                                             FROM   {IIf(ConfigurationManager.AppSettings("LocType").ToString.Trim.ToUpper = "B", "STK04", "POS").ToString}_STKFIL
+                                                             WHERE  EXISTS ( SELECT TOP 1
+                                                                                    1
+                                                                             FROM   STK04_DetBarcode
+                                                                             WHERE  dbar_stkid = STK_RECID
+                                                                                    AND dbar_barcode = '{ScannedBarcode.Trim.Replace("'", "''")}' )
+                                                                    AND ISNULL(STK_ACTIVE, 'N') = 'Y'
+                                                                    AND ISNULL(STK_SendToPOS, 'N') = 'Y'
+                                                                    AND STK_CurrentArchive = 'C'
+                                                           ) StockFile ON StockFile.STK_RECID = Stk04_stkprices.SP_StkRecId
+                                                INNER JOIN ( SELECT Loc_Vat ,
+                                                                    Loc_VATRetType ,
+                                                                    SL_PrefPrc ,
+                                                                    OP_LCBasedOnCC
+                                                             FROM   dbo.STK04_Location
+                                                                    INNER JOIN ( SELECT OP_Loc ,
+                                                                                        OP_LCBasedOnCC
+                                                                                 FROM   STK04_OPParam
+                                                                                 WHERE  OP_Loc = @LocationCode
+                                                                               ) STK04_OPParam ON STK04_OPParam.OP_Loc = STK04_Location.Loc_Code
+                                                                    INNER JOIN ( SELECT SL_Loc ,
+                                                                                        SL_PrefPrc
+                                                                                 FROM   dbo.pos_splocation
+                                                                                 WHERE  SL_Loc = @LocationCode
+                                                                               ) pos_splocation ON SL_Loc = Loc_Code
+                                                           ) Locations ON SL_PrefPrc = SP_PriceType
+                                                LEFT JOIN ( SELECT  MAX(CT_OPDATE) WorkingDate
+                                                            FROM    dbo.POS_CASHTRANSACTION
+                                                            WHERE   CT_LOCATION = @LocationCode
+                                                          ) WkDateTbl ON 1 = 1
+                                      WHERE ISNULL(SP_StartingQty, 0) = 0
+                                    ) tblStock; "

@@ -1,0 +1,130 @@
+diff --git a/ClsPricing.cs b/ClsPricing.cs
+index b474457..17a1c94 100644
+--- a/ClsPricing.cs
++++ b/ClsPricing.cs
+@@ -602,12 +602,12 @@ namespace SuperStoreBusiness
+                 }
+ 
+                 if (BaseCurrencyLC == true)
+                 {
+                     Prc = ClsPricing.RoundPrice(Math.Round(Prc, ClsConfig.locationDirectives.Ld_PriceLC));
+-                    Prc2 = ClsPricing.RoundPrice(Math.Round(Prc, ClsConfig.locationDirectives.Ld_PriceLC));
+-                    Prc3 = ClsPricing.RoundPrice(Math.Round(Prc, ClsConfig.locationDirectives.Ld_PriceLC));
++                    Prc2 = ClsPricing.RoundPrice(Math.Round(Prc2, ClsConfig.locationDirectives.Ld_PriceLC));
++                    Prc3 = ClsPricing.RoundPrice(Math.Round(Prc3, ClsConfig.locationDirectives.Ld_PriceLC));
+ 
+                     if (string.IsNullOrEmpty(ModPrice) || ModPrice == "Price1")
+                     {
+                         txtPrice1LL = Math.Round(Convert.ToDouble(Prc), ClsConfig.locationDirectives.Ld_PriceLC).ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                     }
+@@ -632,17 +632,17 @@ namespace SuperStoreBusiness
+ 
+                     if (ClsConfig.locationDirectives.Ld_SalePriceCalculationMode?.ToUpper() == "M".ToUpper() || ClsConfig.locationDirectives.Ld_SalePriceCalculationMode?.ToUpper() == "N".ToUpper())
+                     {
+                         if (Oper2 == "*")
+                         {
+-                            txtPrice1CC = Math.Round(Prc / Rate2, 2).ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
++                            txtPrice1CC = Math.Round(Prc / Rate2, ClsConfig.locationDirectives.Ld_PriceCC).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                             txtPrice2CC = Math.Round((Convert.ToDouble(string.IsNullOrEmpty(txtPrice2LL) ? "0" : txtPrice2LL) / Rate2), ClsConfig.locationDirectives.Ld_PriceCC).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                             txtPrice3CC = Math.Round((Convert.ToDouble(string.IsNullOrEmpty(txtPrice3LL) ? "0" : txtPrice3LL) / Rate2), ClsConfig.locationDirectives.Ld_PriceCC).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                         }
+                         else if (Oper2 == "/")
+                         {
+-                            txtPrice1CC = Math.Round(Prc * Rate2, 2).ToString("N");
++                            txtPrice1CC = Math.Round(Prc * Rate2, ClsConfig.locationDirectives.Ld_PriceCC).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                             txtPrice2CC = Math.Round((Convert.ToDouble(string.IsNullOrEmpty(txtPrice2LL) ? "0" : txtPrice2LL) * Rate2), ClsConfig.locationDirectives.Ld_PriceCC).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                             txtPrice3CC = Math.Round((Convert.ToDouble(string.IsNullOrEmpty(txtPrice3LL) ? "0" : txtPrice3LL) * Rate2), ClsConfig.locationDirectives.Ld_PriceCC).ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                         }
+                     }
+                     else
+@@ -803,11 +803,11 @@ namespace SuperStoreBusiness
+                     if (QtyPur != 0 && QtyProm != 0 && UsePromQty)
+                     {
+                         Res *= QtyPur / (QtyPur + QtyProm);
+                     }
+ 
+-                    if (ClsConfig.oHSystem.Osh_Active == "Y" || ClsConfig.oHSystem.Osh_Active == "A")
++                    if (ClsConfig.oHSystem != null && (ClsConfig.oHSystem.Osh_Active == "Y" || ClsConfig.oHSystem.Osh_Active == "A"))
+                     {
+                         if (string.IsNullOrEmpty(CustomsPerc)) CustomsPerc = "0.00";
+                         if (string.IsNullOrEmpty(FixedPer)) FixedPer = "0.00";
+                         Res += Res * (double.Parse(CustomsPerc) + double.Parse(FixedPer)) / 100;
+                     }
+@@ -922,41 +922,41 @@ namespace SuperStoreBusiness
+             {
+ 
+                 if (!string.IsNullOrWhiteSpace(InitialPrice1LL) && double.TryParse(InitialPrice1LL.Trim(), out double priceValue))
+                 {
+                     priceValue = double.Parse(InitialPrice1LL) * toBaseUnit;
+-                    Price1LC = priceValue.ToString(ClsConfig.locationDirectives.Ld_CostLCFormat);
++                    Price1LC = priceValue.ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                 }
+ 
+                 if (!string.IsNullOrWhiteSpace(InitialPrice1CC) && double.TryParse(InitialPrice1CC.Trim(), out double priceValueCC))
+                 {
+                     priceValueCC = double.Parse(InitialPrice1CC) * toBaseUnit;
+-                    Price1CC = priceValueCC.ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
++                    Price1CC = priceValueCC.ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                 }
+ 
+                 if (!string.IsNullOrWhiteSpace(InitialPrice2LL) && double.TryParse(InitialPrice2LL.Trim(), out double priceValue2))
+                 {
+                     priceValue2 = double.Parse(InitialPrice2LL) * toBaseUnit;
+-                    Price2LC = priceValue2.ToString(ClsConfig.locationDirectives.Ld_CostLCFormat);
++                    Price2LC = priceValue2.ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                 }
+ 
+                 if (!string.IsNullOrWhiteSpace(InitialPrice2CC) && double.TryParse(InitialPrice2CC.Trim(), out double priceValue2CC))
+                 {
+                     priceValue2CC = double.Parse(InitialPrice2CC) * toBaseUnit;
+-                    Price2CC = priceValue2CC.ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
++                    Price2CC = priceValue2CC.ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                 }
+ 
+                 if (!string.IsNullOrWhiteSpace(InitialPrice3LL) && double.TryParse(InitialPrice3LL.Trim(), out double priceValue3))
+                 {
+                     priceValue3 = Convert.ToDouble(InitialPrice3LL) * toBaseUnit;
+-                    Price3LC = priceValue3.ToString(ClsConfig.locationDirectives.Ld_CostLCFormat);
++                    Price3LC = priceValue3.ToString(ClsConfig.locationDirectives.Ld_PriceLCFormat);
+                 }
+ 
+                 if (!string.IsNullOrWhiteSpace(InitialPrice3CC) && double.TryParse(InitialPrice3CC.Trim(), out double priceValue3CC))
+                 {
+                     priceValue3CC = Convert.ToDouble(InitialPrice3CC) * toBaseUnit;
+-                    Price3CC = priceValue3CC.ToString(ClsConfig.locationDirectives.Ld_CostCCFormat);
++                    Price3CC = priceValue3CC.ToString(ClsConfig.locationDirectives.Ld_PriceCCFormat);
+                 }
+ 
+             }
+             catch (Exception)
+             {
+@@ -973,13 +973,27 @@ namespace SuperStoreBusiness
+                                                                string OldDiscount = "")
+         {
+             try
+             {
+ 
+-                Discount = ((Convert.ToDouble(NewPrice) * Convert.ToDouble(OldDiscount)) / Convert.ToDouble(OriginalPrice)).ToString("N2");
++                double originalPrice = string.IsNullOrWhiteSpace(OriginalPrice) ? 0 : Convert.ToDouble(OriginalPrice);
++                double newPrice = string.IsNullOrWhiteSpace(NewPrice) ? 0 : Convert.ToDouble(NewPrice);
++                double originalPriceCV = string.IsNullOrWhiteSpace(OriginalPriceCV) ? 0 : Convert.ToDouble(OriginalPriceCV);
++                double oldDiscount = string.IsNullOrWhiteSpace(OldDiscount) ? 0 : Convert.ToDouble(OldDiscount);
+ 
+-                NewPriceCV = (Convert.ToDouble(OriginalPriceCV) * (Convert.ToDouble(NewPrice) * Convert.ToDouble(OldDiscount)) / Convert.ToDouble(OriginalPrice)) / Convert.ToDouble(OldDiscount);
++                // No reference price: keep the old discount and leave the other currency unchanged (avoids a division by zero / NaN)
++                if (originalPrice == 0)
++                {
++                    Discount = oldDiscount.ToString("N2");
++                    NewPriceCV = originalPriceCV;
++                    return;
++                }
++
++                Discount = ((newPrice * oldDiscount) / originalPrice).ToString("N2");
++
++                // Same ratio applied to the other currency (the old discount cancels out of the original formula)
++                NewPriceCV = originalPriceCV * newPrice / originalPrice;
+ 
+             }
+             catch (Exception)
+             {
+ 

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.erpdatacollectorn"
+    android:versionCode="1"
+    android:versionName="1.0" >
+
+    <uses-sdk
+        android:minSdkVersion="8"
+        android:targetSdkVersion="18" />
+
+    <uses-permission android:name="android.permission.CAMERA" >
+    </uses-permission>
+
+    <uses-feature android:name="android.hardware.camera" />
+    <uses-feature android:name="android.hardware.camera.autofocus" />
+
+    <uses-permission android:name="android.permission.FLASHLIGHT" >
+    </uses-permission>
+    <uses-permission android:name="android.permission.VIBRATE" >
+    </uses-permission>
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" >
+    </uses-permission>
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme" >
+        <activity
+            android:name="com.example.erpdatacollectorn.MainActivity"
+            android:label="@string/app_name" >
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.Settings"
+            android:label="@string/title_activity_settings" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.Synchronize"
+            android:label="@string/title_activity_synchronize" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.ListNotScannedItems"
+            android:label="@string/title_activity_list_not_scanned_items" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.BarcodeScan"
+            android:label="@string/title_activity_barcode_scan" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.ViewOptions"
+            android:label="@string/title_activity_view_options" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.ViewItems"
+            android:label="@string/title_activity_view_items" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.MultiSearchActivity"
+            android:label="@string/title_activity_multi_search" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.ServerSettingsActivity"
+            android:label="@string/title_activity_server_settings" >
+        </activity>
+        <activity
+            android:name="com.example.erpdatacollectorn.ConfigurationSettingsList"
+            android:label="@string/title_activity_configuration_settings_list" >
+        </activity>
+    </application>
+
+</manifest>
