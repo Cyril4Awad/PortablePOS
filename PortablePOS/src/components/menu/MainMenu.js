@@ -166,7 +166,7 @@ export const STEPS = [
         type: 'MI',
         stackScreen: 'ReceivingOrder',
         title: 'Receiving Order',
-        description: 'Receive, modify or cancel supplier receiving orders',
+        description: 'Receive supplier items to this location',
         imageSource: require('../../assets/icons/orders.png'),
         menuActive: true,
         needCashRegister: false
@@ -192,22 +192,22 @@ export const STEPS = [
         title: 'PHYSICAL INVENTORY',
     },
     {
-        recKey: 'P1',
-        type: 'MI',
-        stackScreen: 'PhysicalCount',
-        title: 'Physical Count',
-        description: 'Count stock offline and upload the counted quantities',
-        imageSource: require('../../assets/icons/barcode.png'),
-        menuActive: true,
-        needCashRegister: false
-    },
-    {
         recKey: 'P2',
         type: 'MI',
         stackScreen: 'PhysicalCountCreate',
         title: 'Create Physical Count',
         description: 'Choose the items and create a count for this machine',
         imageSource: require('../../assets/icons/stock.png'),
+        menuActive: true,
+        needCashRegister: false
+    },
+    {
+        recKey: 'P1',
+        type: 'MI',
+        stackScreen: 'PhysicalCount',
+        title: 'Physical Count',
+        description: 'Count stock offline and upload the counted quantities',
+        imageSource: require('../../assets/icons/barcode.png'),
         menuActive: true,
         needCashRegister: false
     },

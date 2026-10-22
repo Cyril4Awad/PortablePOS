@@ -32,6 +32,12 @@ AS
             ISNULL(SFP_UNITPACK, 1) [itemUnitPack] ,
             ISNULL(SFP_operator, '*') [itemOperator] ,
             ISNULL(MEASUB.Meas_Sign, '*') [itemMeasSign] ,
+            UPPER(ISNULL(MEASUB.Meas_Type, 'P')) [itemMeasType] ,
+            CONVERT(DECIMAL(18, 6), CASE WHEN ISNULL(SFP_UNITPACK, 1) = 0 OR ISNULL(MEASUB.Meas_Value, 1) = 0 THEN 0
+                                         WHEN ISNULL(MEASUB.Meas_Sign, '*') = '/' AND LTRIM(RTRIM(ISNULL(SFP_OPERATOR, '*'))) <> '/' THEN ISNULL(SFP_UNITPACK, 1) / ISNULL(MEASUB.Meas_Value, 1)
+                                         WHEN ISNULL(MEASUB.Meas_Sign, '*') = '/' THEN 1.0 / ISNULL(SFP_UNITPACK, 1) / ISNULL(MEASUB.Meas_Value, 1)
+                                         WHEN LTRIM(RTRIM(ISNULL(SFP_OPERATOR, '*'))) <> '/' THEN ISNULL(SFP_UNITPACK, 1) * ISNULL(MEASUB.Meas_Value, 1)
+                                         ELSE 1.0 / ISNULL(SFP_UNITPACK, 1) * ISNULL(MEASUB.Meas_Value, 1) END) [itemConsFactor] ,
             ISNULL(MEASUB.Meas_Value, 1) [itemMeasValue] ,
             LTRIM(RTRIM(ISNULL(SFP_OpSource, ''))) [pendingSource]
     FROM    dbo.STK04_StkFilPending

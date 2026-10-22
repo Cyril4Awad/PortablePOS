@@ -26,6 +26,29 @@ export const DraftIssue = (draft) => {
 // The total qty that goes in (normal and free) less the returns
 export const DraftTotalQty = (lines) => lines.reduce((total, line) => total + SignedQty(line), 0);
 
+const MEAS_LABELS = { P: 'Pcs', W: 'Kg', L: 'M' };
+
+const STATUS_TOTAL_LABELS = { N: 'Normal', F: 'Free', R: 'Return' };
+
+// The totals of FrmDO (RefQtyLbl) : normal, free and return apart (a return is not taken out), each by the measure type
+// of the sub unit (pieces, weight, length), in sub unit qty (DOD_ConsQty), e.g. 'Normal Pcs 625  ·  Return Pcs 600'
+export const DraftMeasTotals = (lines) => {
+    const totals = {};
+    lines.forEach(line => {
+        const status = STATUS_TOTAL_LABELS[line.lineStatus] ? line.lineStatus : 'N';
+        const type = MEAS_LABELS[line.itemMeasType] ? line.itemMeasType : 'P';
+        const factor = line.itemConsFactor === undefined || line.itemConsFactor === null ? 1 : Number(line.itemConsFactor);
+        const key = status + type;
+        totals[key] = (totals[key] ?? 0) + LineQty(line) * factor;
+    });
+    const shown = [];
+    Object.keys(STATUS_TOTAL_LABELS).forEach(status => Object.keys(MEAS_LABELS).forEach(type => {
+        const total = totals[status + type];
+        if (total !== undefined) shown.push(`${STATUS_TOTAL_LABELS[status]} ${MEAS_LABELS[type]} ${FormatQty(Math.round(total * 1000) / 1000)}`);
+    }));
+    return shown.length === 0 ? 'Pcs 0' : shown.join('  ·  ');
+};
+
 const Payload = (draft) => ({
     roRecID: draft.roRecID,
     supplierRecID: draft.supplier ? draft.supplier.supplierRecID.toString() : '',
@@ -50,7 +73,7 @@ const Payload = (draft) => ({
 
 // Asks, saves, then the receiving order is cleared and onSaved(roRecID) is called
 // setSaving(true / false) : shows the saving card (SavingModal)
-export const ConfirmAndSave = (draft, setSaving, onSaved) => {
+export const ConfirmAndSave = async (draft, setSaving, onSaved) => {
 
     const issue = DraftIssue(draft);
     if (issue !== '') {
@@ -58,10 +81,24 @@ export const ConfirmAndSave = (draft, setSaving, onSaved) => {
         return;
     }
 
+    // A new RO cannot take a ref already used (the save checks it again)
+    if (draft.mode === 'ADD') {
+        try {
+            if (await ReceivingOrderData.RefExists(draft.roRef.trim())) {
+                Alert.alert('RO Ref. #', `The RO Ref. # ${draft.roRef.trim()} is already used by another receiving order, change it.`);
+                return;
+            }
+        }
+        catch (err) {
+            Alert.alert('Not Saved', err.message);
+            return;
+        }
+    }
+
     const lines = draft.mode === 'CANCEL' ? draft.savedLines : draft.lines;
     const question = draft.mode === 'CANCEL'
-        ? `Receiving order #${draft.roRecID} will be cancelled : a reverse receiving order takes its ${Plural(lines.length, 'line')} (qty ${FormatQty(DraftTotalQty(lines))}) out of the stock of ${draft.location?.locationCode}.`
-        : `${draft.supplier?.supplierName}\n${Plural(lines.length, draft.mode === 'MODIFY' ? 'new line' : 'line')}, total qty ${FormatQty(DraftTotalQty(lines))} in ${draft.location?.locationCode}.`;
+        ? `Receiving order #${draft.roRecID} will be cancelled : a reverse receiving order takes its ${Plural(lines.length, 'line')} (${DraftMeasTotals(lines)}) out of the stock of ${draft.location?.locationCode}.`
+        : `${draft.supplier?.supplierName}\n${Plural(lines.length, draft.mode === 'MODIFY' ? 'new line' : 'line')}, ${DraftMeasTotals(lines)} in ${draft.location?.locationCode}.`;
 
     Alert.alert(draft.mode === 'CANCEL' ? 'Cancel Receiving Order' : MODE_TITLES[draft.mode], question, [
         { text: 'Not Now', style: 'cancel' },

@@ -18,16 +18,18 @@ const EMPTY_LOT = { expiry: '', batch: '', production: '', qty: '', barcodes: []
 
 // One line of the receiving order (FrmDO rules) : the status (normal, free, return), the supplier ref,
 // the qty (trading item) or the expiry / lots (expiry item), the barcodes
-// route.params : { item, prefillLot } for a new line, { lineID } for a line of the list (a saved line is read only)
+// route.params : { item, prefillLot } for a new line, { lineID } for a line of the list (a saved line is read only), view : the RO viewed
 const ReceivingOrderLineScreen = ({ route, navigation }) => {
 
-    const draft = useReceivingOrderDraft();
+    // view : a line of the receiving order viewed
+    const view = !!route.params?.view;
+    const draft = useReceivingOrderDraft(view);
 
     // The line being edited, or a new one for the item
     const existing = route.params?.lineID
-        ? [...(GetDraft()?.lines ?? []), ...(GetDraft()?.savedLines ?? [])].find(line => line.lineID === route.params.lineID)
+        ? [...(GetDraft(view)?.lines ?? []), ...(GetDraft(view)?.savedLines ?? [])].find(line => line.lineID === route.params.lineID)
         : null;
-    const readOnly = !!existing && (GetDraft()?.savedLines ?? []).some(line => line.lineID === existing.lineID) || isReadOnlyMode(GetDraft()?.mode);
+    const readOnly = !!existing && (GetDraft(view)?.savedLines ?? []).some(line => line.lineID === existing.lineID) || isReadOnlyMode(GetDraft(view)?.mode);
     const item = existing ?? route.params?.item ?? {};
     const lotItem = isLotItem(item.itemClass);
     // An item of the pending stock file : created in the stock file when the RO is saved (no stock, no return, cost 0)
@@ -96,7 +98,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
     };
 
     // The qty already returned by the other new lines of the same item and lot
-    const ReturnedByOthers = (expiry, batch) => (GetDraft()?.lines ?? [])
+    const ReturnedByOthers = (expiry, batch) => (GetDraft(view)?.lines ?? [])
         .filter(line => line.lineStatus === 'R' && line.itemRecID.toString() === item.itemRecID.toString() && line.lineID !== existing?.lineID)
         .reduce((total, line) => total + (lotItem
             ? line.lots.filter(lot => lot.expiry === expiry && lot.batch === batch).reduce((sum, lot) => sum + Number(lot.qty), 0)
@@ -118,7 +120,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
     //#region Barcodes
 
     // Every barcode already used in the receiving order, except the ones of this line
-    const OtherBarcodes = () => [...(GetDraft()?.lines ?? []), ...(GetDraft()?.savedLines ?? [])]
+    const OtherBarcodes = () => [...(GetDraft(view)?.lines ?? []), ...(GetDraft(view)?.savedLines ?? [])]
         .filter(line => line.lineID !== existing?.lineID)
         .reduce((all, line) => all.concat(LineBarcodes(line)), []);
 
@@ -425,6 +427,8 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
             itemUnit: item.itemUnit,
             itemBarcode: item.itemBarcode,
             itemQtyControl: item.itemQtyControl,
+            itemMeasType: item.itemMeasType,
+            itemConsFactor: item.itemConsFactor,
             itemVatType: item.itemVatType,
             itemCostCC: item.itemCostCC,
             itemCurrency: item.itemCurrency,

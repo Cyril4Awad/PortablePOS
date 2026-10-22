@@ -6,17 +6,21 @@ import { TodayISO } from './ReceivingOrderRules';
 // supplier : { supplierRecID, supplierCode, supplierName }, location : { locationCode, locationDescription }, po : { poRecID, poDate }
 // lines : the new lines { lineID, itemRecID, itemReference, itemDescription, itemClass, itemUnit, itemQtyControl, supplierRef,
 //         lineStatus, qty, lots: [{ lotID, expiry, batch, production, qty, barcodes }], barcodes, poQty }
-// savedLines : the lines already saved (MODIFY, CANCEL), read only
+// savedLines : the lines already saved (MODIFY, CANCEL, VIEW), read only
+// A receiving order opened to view (VIEW) is kept apart (view = true) : the one being prepared stays
 
 let draft = null;
+let viewed = null;
 let lastID = 0;
 const listeners = new Set();
+const viewListeners = new Set();
 
 const notify = () => listeners.forEach(listener => listener(draft));
+const notifyView = () => viewListeners.forEach(listener => listener(viewed));
 
 export const NextID = () => ++lastID;
 
-export const GetDraft = () => draft;
+export const GetDraft = (view = false) => view ? viewed : draft;
 
 export const StartDraft = (mode, receivingOrder = null) => {
 
@@ -26,7 +30,7 @@ export const StartDraft = (mode, receivingOrder = null) => {
         lots: (line.lots ?? []).map(lot => ({ ...lot, lotID: NextID(), production: '' })),
     }));
 
-    draft = {
+    const started = {
         mode,
         roRecID: receivingOrder ? receivingOrder.roRecID.toString() : '',
         supplier: receivingOrder ? {
@@ -42,12 +46,23 @@ export const StartDraft = (mode, receivingOrder = null) => {
         lines: [],
         savedLines,
     };
-    notify();
-    return draft;
+    if (mode === 'VIEW') {
+        viewed = started;
+        notifyView();
+    }
+    else {
+        draft = started;
+        notify();
+    }
+    return started;
 };
 
-// The location chosen last is kept for the next new RO
-export const ClearDraft = () => {
+export const ClearDraft = (view = false) => {
+    if (view) {
+        viewed = null;
+        notifyView();
+        return;
+    }
     draft = null;
     notify();
 };
@@ -60,13 +75,14 @@ export const UpdateDraft = (changes) => {
 
 export const SetLines = (change) => UpdateDraft(current => ({ lines: change(current.lines) }));
 
-// The draft in a component, refreshed on every change
-export const useReceivingOrderDraft = () => {
-    const [value, setValue] = useState(draft);
+// The draft (view : the receiving order viewed) in a component, refreshed on every change
+export const useReceivingOrderDraft = (view = false) => {
+    const [value, setValue] = useState(GetDraft(view));
     useEffect(() => {
-        setValue(draft);
-        listeners.add(setValue);
-        return () => listeners.delete(setValue);
-    }, []);
+        const set = view ? viewListeners : listeners;
+        setValue(GetDraft(view));
+        set.add(setValue);
+        return () => set.delete(setValue);
+    }, [view]);
     return value;
 };

@@ -6606,10 +6606,12 @@ Public Class DataService
 
         Try
 
+            'isCurrent = 1 : the location of the service (LocCode of the Web.config), the one we transfer from
             Return TransferPage(" SELECT   locationCode ,
-                                           locationDescription
+                                           locationDescription ,
+                                           CASE WHEN locationCode = @Location THEN 1 ELSE 0 END isCurrent
                                   FROM     V_CPP_TransferLocations
-                                  ORDER BY locationCode ", -1, "")
+                                  ORDER BY locationCode ", -1, LocCode)
 
         Catch ex As Exception
             Return "Error " & ex.Message
@@ -7545,7 +7547,7 @@ Public Class DataService
 
     'The item columns sent to the device
     Private Const ROItemColumns As String = " I.itemRecID , I.itemReference , I.itemSingleRef1 , I.itemBarcode , I.itemDescription , I.itemClass ,
-                                              I.itemUnit , I.itemSubUnit , I.itemVatType , I.itemCostCC , I.itemQtyControl ,
+                                              I.itemUnit , I.itemSubUnit , I.itemVatType , I.itemCostCC , I.itemQtyControl , I.itemMeasType , I.itemConsFactor ,
                                               CASE WHEN I.itemHaltPurchase = 'Y' AND I.itemHaltTill > CONVERT(DATE, GETDATE()) THEN 1 ELSE 0 END [itemHalted] ,
                                               ISNULL(CONVERT(VARCHAR(10), I.itemBBFDate, 120), '') [itemBBFDate] "
 
@@ -7581,7 +7583,9 @@ Public Class DataService
 
         Try
 
-            Return ROJson(" SELECT locationCode , locationDescription FROM V_CPP_ROLocations ORDER BY locationCode ")
+            'Only the location of the service (LocCode of the Web.config) : the user receives to the location he is in
+            Return ROJson(" SELECT locationCode , locationDescription FROM V_CPP_ROLocations WHERE locationCode = @LocCode ",
+                          New SqlParameter("@LocCode", SqlDbType.VarChar, 2) With {.Value = LocCode.Trim})
 
         Catch ex As Exception
             Return "Error " & ex.Message
@@ -7727,6 +7731,8 @@ Public Class DataService
             {"itemCostCC", CDec(row("itemCostCC"))},
             {"itemCurrency", settings.CurrencyCC},
             {"itemQtyControl", row("itemQtyControl").ToString},
+            {"itemMeasType", row("itemMeasType").ToString.Trim.ToUpper},
+            {"itemConsFactor", CDec(row("itemConsFactor"))},
             {"supplierRef", reference},
             {"codeExpiry", ""},
             {"codeBatch", ""},
@@ -8099,7 +8105,8 @@ Public Class DataService
                                                                            D.lineQty , ISNULL(D.lineCostCC, 0) [lineCostCC] , ISNULL(D.lineVatType, '') [lineVatType] ,
                                                                            ISNULL(I.itemReference, '') [itemReference] , ISNULL(I.itemDescription, '') [itemDescription] ,
                                                                            ISNULL(I.itemClass, CASE WHEN EXISTS ( SELECT TOP 1 1 FROM V_CPP_ROLineLots Q WHERE Q.lineRecID = D.lineRecID ) THEN 'E' ELSE 'T' END) [itemClass] ,
-                                                                           ISNULL(I.itemUnit, '') [itemUnit] , ISNULL(I.itemBarcode, '') [itemBarcode]
+                                                                           ISNULL(I.itemUnit, '') [itemUnit] , ISNULL(I.itemBarcode, '') [itemBarcode] ,
+                                                                           ISNULL(I.itemMeasType, 'P') [itemMeasType] , ISNULL(I.itemConsFactor, 1) [itemConsFactor]
                                                                    FROM    V_CPP_ROLines D
                                                                            LEFT JOIN V_CPP_ROItems I ON I.itemRecID = D.itemRecID
                                                                    WHERE   D.roRecID = @RORecID
@@ -8144,6 +8151,8 @@ Public Class DataService
                         {"itemClass", row("itemClass").ToString.Trim.ToUpper},
                         {"itemUnit", row("itemUnit").ToString},
                         {"itemBarcode", row("itemBarcode").ToString},
+                        {"itemMeasType", row("itemMeasType").ToString.Trim.ToUpper},
+                        {"itemConsFactor", CDec(row("itemConsFactor"))},
                         {"supplierRef", row("supplierRef").ToString},
                         {"lineStatus", row("lineStatus").ToString.Trim.ToUpper},
                         {"qty", CDec(row("lineQty"))},
@@ -8407,6 +8416,12 @@ Public Class DataService
         If roRef = "" Then Return "Error You Should Put A RO Ref. #"
         If roRef.Length > 15 Then Return "Error The RO Ref. # Can Have 15 Characters"
 
+        'A new RO cannot take the ref of another one (a reverse RO keeps the ref of the RO it cancels)
+        If mode = "ADD" Then
+            Dim usedBy As Object = ROScalar(cnsql, trnsql, " SELECT TOP 1 roRecID FROM V_CPP_ROHeaders WHERE UPPER(roRef) = UPPER(@RORef) ", ROParam("@RORef", roRef))
+            If usedBy IsNot Nothing AndAlso usedBy IsNot DBNull.Value Then Return "Error The RO Ref. # " & roRef & " Is Already Used By Receiving Order #" & usedBy.ToString
+        End If
+
         Dim dtSupplier As DataTable = RORead(cnsql, trnsql, $" SELECT S.supplierCode , S.supplierName FROM V_CPP_ROSuppliers S
                                                                WHERE S.supplierRecID = @SupplierRecID {ROSupplierAccess(user, "S")} ",
                                              ROUserParams(user, ROParam("@SupplierRecID", supplier)))
@@ -8414,6 +8429,10 @@ Public Class DataService
 
         If ROScalar(cnsql, trnsql, " SELECT COUNT(*) FROM V_CPP_ROLocations WHERE locationCode = @LocationCode ", ROParam("@LocationCode", locationCode)).ToString = "0" Then
             Return "Error You Should Choose Receiving Location"
+        End If
+
+        If mode = "ADD" AndAlso locationCode <> LocCode.Trim Then
+            Return "Error You Can Only Receive To Location " & LocCode.Trim
         End If
 
         If mode = "ADD" AndAlso purchaseOrder <> 0 Then

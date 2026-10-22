@@ -33,14 +33,12 @@ import FreeReceivingScreen from './../screens/FreeReceivingScreen';
 import FreeReceivingScanScreen from './../screens/FreeReceivingScanScreen';
 import FreeReceivingItemsScreen from './../screens/FreeReceivingItemsScreen';
 import FreeReceivingSettingsScreen from './../screens/FreeReceivingSettingsScreen';
-import TransferScreen from './../screens/TransferScreen';
 import TransferScanScreen from './../screens/TransferScanScreen';
 import TransferItemsScreen from './../screens/TransferItemsScreen';
 import TransferSettingsScreen from './../screens/TransferSettingsScreen';
 import ReceivingOrderScreen from './../screens/ReceivingOrderScreen';
 import ReceivingOrderListScreen from './../screens/ReceivingOrderListScreen';
 import ReceivingOrderEditScreen from './../screens/ReceivingOrderEditScreen';
-import ReceivingOrderItemsScreen from './../screens/ReceivingOrderItemsScreen';
 import ReceivingOrderLineScreen from './../screens/ReceivingOrderLineScreen';
 
 const AppNavigator = (params) => {
@@ -267,14 +265,6 @@ const AppNavigator = (params) => {
                     })} />
 
                 <Stack.Screen
-                    name='ReceivingOrderItems'
-                    component={ReceivingOrderItemsScreen}
-                    options={({ navigation }) => ({
-                        title: 'Receiving Order - Items',
-                        ...BackArrowOptions(navigation),
-                    })} />
-
-                <Stack.Screen
                     name='ReceivingOrderLine'
                     component={ReceivingOrderLineScreen}
                     options={({ navigation }) => ({
@@ -284,17 +274,9 @@ const AppNavigator = (params) => {
 
                 <Stack.Screen
                     name='Transfer'
-                    component={TransferScreen}
-                    options={({ navigation }) => ({
-                        title: 'Transfer',
-                        ...BackArrowOptions(navigation),
-                    })} />
-
-                <Stack.Screen
-                    name='TransferScan'
                     component={TransferScanScreen}
                     options={({ navigation }) => ({
-                        title: 'Transfer - Prepare',
+                        title: 'Transfer',
                         ...BackArrowOptions(navigation),
                     })} />
 

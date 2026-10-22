@@ -19,14 +19,15 @@ const Tile = ({ title, description, imageSource, onPress, highlighted, compact }
 );
 
 // Receiving Order (FrmDO "Receiving Order", trading and expiry items) : online, saved in one call
-// New = a new RO (optionally from a purchase order), View = read only, Modify = new lines added to an RO, Cancel = a reverse RO
+// New = a new RO to the location of the server (optionally from a purchase order), View = read only (the RO being prepared stays),
+// Modify = new lines added to an RO, Cancel = a reverse RO
 const ReceivingOrderScreen = props => {
 
     const draft = useReceivingOrderDraft();
 
     // A receiving order being prepared is kept until it is saved or cleared (viewing one does not need to ask)
     const Start = (start) => {
-        if (!draft || draft.mode === 'VIEW') {
+        if (!draft) {
             start();
             return;
         }
@@ -37,7 +38,7 @@ const ReceivingOrderScreen = props => {
         ]);
     };
 
-    const preparing = draft && draft.mode !== 'VIEW';
+    const preparing = !!draft;
 
     return (
         <View style={styles.container}>
@@ -59,7 +60,7 @@ const ReceivingOrderScreen = props => {
 
                 <Tile compact={!!preparing} title='View' imageSource={require('../assets/icons/orders.png')}
                     description='Open a receiving order to see it, nothing changes'
-                    onPress={() => Start(() => props.navigation.navigate('ReceivingOrderList', { mode: 'VIEW' }))} />
+                    onPress={() => props.navigation.navigate('ReceivingOrderList', { mode: 'VIEW' })} />
 
                 <Tile compact={!!preparing} title='Modify' imageSource={require('../assets/icons/trolleyEdit.png')}
                     description='Add new lines to a receiving order'

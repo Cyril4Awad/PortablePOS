@@ -48,7 +48,7 @@ const ReceivingOrderListScreen = ({ route, navigation }) => {
         ReceivingOrderData.GetReceivingOrder(order.roRecID, mode !== 'VIEW')
             .then(receivingOrder => {
                 StartDraft(mode, receivingOrder);
-                navigation.replace('ReceivingOrderEdit');
+                navigation.replace('ReceivingOrderEdit', { view: mode === 'VIEW' });
             })
             .catch(err => {
                 setIsLoading(false);
@@ -91,12 +91,6 @@ const ReceivingOrderListScreen = ({ route, navigation }) => {
                 />
             </View>
 
-            <View style={[styles.statusContainer, { backgroundColor: mode === 'CANCEL' ? 'rgb(200, 60, 60)' : Colors.brandBlue }]}>
-                <Text style={styles.statusText} numberOfLines={1}>
-                    {mode === 'CANCEL' ? 'Choose the receiving order to cancel' : mode === 'VIEW' ? 'Choose the receiving order to view' : 'Choose the receiving order to add lines to'}
-                </Text>
-            </View>
-
             {isLoading ?
                 <View style={styles.list}><LoadingData /></View> :
                 <FlatList
@@ -133,17 +127,6 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         paddingLeft: 10,
         paddingVertical: 0,
-    },
-    statusContainer: {
-        height: 32,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 10,
-    },
-    statusText: {
-        color: 'white',
-        fontSize: FontSize(15),
-        fontWeight: 'bold',
     },
     list: {
         flex: 1,

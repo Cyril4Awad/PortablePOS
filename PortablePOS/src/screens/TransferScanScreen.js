@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, Keyboard, Vibration, Image, FlatList, ScrollView, Alert } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Colors from '../variables/Colors';
 import { FontSize } from '../variables/ResponsiveFont';
+import ChoiceField, { choiceRowStyle } from '../components/controls/ChoiceField';
 import PhysicalCountFilterPicker from '../components/lists/physicalCount/PhysicalCountFilterPicker';
 import TransferItemPicker from '../components/lists/transfer/TransferItemPicker';
 import TransferLotPicker from '../components/lists/transfer/TransferLotPicker';
 import TransferDetailsModal from '../components/lists/transfer/TransferDetailsModal';
+import { useTransferDownload } from '../components/lists/transfer/TransferDownload';
 import TransferDatabase from '../database/TransferDatabase';
 import TransferSettings from '../configuration/TransferSettings';
 import { PlayScanOk, PlayScanError, PlayQtyConfirmed } from '../variables/PhysicalCountSounds';
@@ -15,7 +17,9 @@ import {
   CheckTransferQty, CheckLineQty, ParseTransferQty,
 } from '../variables/TransferRules';
 
-// Prepare Transfer : scan a barcode or search a reference, the lot of the item is transferred
+// Transfer on one screen : the header folds away (from location = the one of the server, server and machine open the settings,
+// the stock downloaded, the way of work and the destination, deliver by / remarks), under it the scan and the items
+// Scan a barcode or search a reference, the lot of the item is transferred
 // - One location : every scan adds 1 to its line (the qty can be changed in the list), all the lines go to the destination
 // - Multiple locations : one item at a time, its qty is typed for each destination
 // The way of work is locked once the transfer has an item, until its items are cleared
@@ -23,6 +27,11 @@ import {
 const Plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
 const TransferScanScreen = () => {
+
+  // The settings : { server, location, machineName }
+  const [settings, setSettings] = useState({ server: '', location: null, machineName: '' });
+  const [headerOpen, setHeaderOpen] = useState(false);
+  const firstLoad = useRef(true);
 
   const [info, setInfo] = useState(null);
   const [header, setHeader] = useState({ multipleLocations: 0, destination: '', deliverBy: '', remarks: '' });
@@ -144,24 +153,51 @@ const TransferScanScreen = () => {
     }, 80);
   }, [lines]);
 
-  useEffect(() => {
+  // The downloaded stock is the one of the location of the server
+  const IsStockReady = (loadedInfo, location) => loadedInfo !== null && location !== null && loadedInfo.location === location.locationCode && loadedInfo.complete === 1;
 
-    (async () => {
-      const loadedInfo = await TransferDatabase.GetInfo();
-      setInfo(loadedInfo);
-      setDestinations(await TransferDatabase.GetDestinations(loadedInfo.location));
-      const savedField = await TransferSettings.searchField();
-      if (SEARCH_FIELD_LABELS[savedField]) setSearchField(savedField);
-      await Reload();
+  // On every visit (back from the settings) and after a download
+  const LoadAll = async () => {
+    const loadedSettings = {
+      server: await TransferSettings.server(),
+      location: await TransferSettings.location(),
+      machineName: await TransferSettings.machineName(),
+    };
+    setSettings(loadedSettings);
+    const loadedInfo = await TransferDatabase.GetInfo();
+    setInfo(loadedInfo);
+    setDestinations(loadedInfo ? await TransferDatabase.GetDestinations(loadedInfo.location) : []);
+    await Reload();
 
-      const loadedHeader = await TransferDatabase.GetHeader();
-      if (loadedHeader.multipleLocations === 0 && loadedHeader.destination === '') {
-        showStatus('Choose the location to transfer to');
-        setDestinationPickerVisible(true);
-      }
-    })().catch(error => showStatus(error.message, true));
+    const ready = IsStockReady(loadedInfo, loadedSettings.location);
+    if (!firstLoad.current) return;
+    firstLoad.current = false;
 
-  }, []);
+    const savedField = await TransferSettings.searchField();
+    if (SEARCH_FIELD_LABELS[savedField]) setSearchField(savedField);
+
+    // The header is open until the stock is downloaded
+    if (!ready) {
+      setHeaderOpen(true);
+      showStatus('Download the stock first', true);
+      return;
+    }
+    const loadedHeader = await TransferDatabase.GetHeader();
+    if (loadedHeader.multipleLocations === 0 && loadedHeader.destination === '') {
+      showStatus('Choose the location to transfer to');
+      setDestinationPickerVisible(true);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      LoadAll().catch(error => showStatus(error.message, true));
+    }, [])
+  );
+
+  const { Download, ProgressModal } = useTransferDownload(() => LoadAll().catch(error => showStatus(error.message, true)));
+
+  const stockReady = IsStockReady(info, settings.location);
 
   //#endregion
 
@@ -212,6 +248,14 @@ const TransferScanScreen = () => {
 
     enqueue(async () => {
       if (text.trim() === '') return;
+      if (!stockReady) {
+        ShowError(info !== null && settings.location !== null && info.location !== settings.location.locationCode
+          ? `The stock downloaded is the one of location ${info.location}, download location ${settings.location.locationCode}`
+          : 'Download the stock first');
+        setHeaderOpen(true);
+        return;
+      }
+      setHeaderOpen(false);
       if (!multiple && header.destination === '') {
         ShowError('Choose the location to transfer to');
         setDestinationPickerVisible(true);
@@ -468,6 +512,36 @@ const TransferScanScreen = () => {
     ]);
   };
 
+  // The way of work can be changed again afterwards
+  const ClearTransfer = () => {
+    if (summary.lines === 0) {
+      ShowError('No items in the transfer');
+      return;
+    }
+    Alert.alert('Clear Transfer', `Do you want to remove the ${summary.lines} lines of the transfer ?`, [
+      { text: 'No', style: 'cancel', onPress: focusScan },
+      {
+        text: 'Clear', style: 'destructive', onPress: () => enqueue(async () => {
+          await TransferDatabase.ClearLines();
+          setCurrent(null);
+          setDestinationTexts({});
+          await Reload();
+          showStatus('Transfer cleared');
+          focusScan();
+        })
+      },
+    ]);
+  };
+
+  // The stock row : download it again, or look at it (and at the lines of every destination)
+  const StockChoice = () => {
+    Alert.alert('Stock', stockReady ? `Stock of ${info.location} downloaded ${info.downloadDate}` : 'The stock is not downloaded', [
+      { text: 'Cancel', style: 'cancel' },
+      ...(info !== null ? [{ text: 'View Items', onPress: () => navigation.navigate('TransferItems') }] : []),
+      { text: 'Download', onPress: () => Download({ ...settings, info, lines: summary.lines }) },
+    ]);
+  };
+
   //#endregion
 
   //#region Way of work and details
@@ -618,8 +692,20 @@ const TransferScanScreen = () => {
   }, 0);
   const destination = destinationOf(header.destination);
 
+  const location = settings.location;
+  let stockText = 'Not Downloaded';
+  if (info !== null && location !== null && info.location !== location.locationCode) stockText = `Location ${info.location}, download ${location.locationCode}`;
+  else if (info !== null && info.complete === 0) stockText = 'Download Not Completed';
+  else if (info !== null) stockText = `${info.itemsStored} Items  ·  ${info.lotsStored} Lots  ·  ${info.downloadDate}`;
+
+  // Folded : from → to, or what is missing
+  const headerSummary = !stockReady ? 'Stock not downloaded'
+    : `${location.locationCode} → ${multiple ? 'Multiple Locations' : header.destination === '' ? 'Choose The Location' : `${header.destination}${destination ? ' - ' + destination.locationDescription : ''}`}`;
+
   return (
     <View style={styles.container}>
+
+      {ProgressModal()}
 
       <PhysicalCountFilterPicker
         visible={destinationPickerVisible}
@@ -673,28 +759,81 @@ const TransferScanScreen = () => {
         onClose={() => { setLotPick(null); focusScan(); }}
       />
 
-      {/* Way of work, destination (one location), details */}
-      <View style={[styles.barContainer, compact ? styles.hidden : null]}>
-        <TouchableOpacity style={[styles.pillButton, styles.multipleButton, multiple ? { flex: 1 } : null]} onPress={ToggleMultiple}>
-          <Image
-            source={multiple ? require('../assets/icons/checked.png') : require('../assets/icons/unchecked.png')}
-            style={[styles.checkImage, { opacity: summary.lines > 0 ? 0.5 : 1 }]}
-            resizeMode='contain'
+      {/* The header : tap to fold or unfold it */}
+      <TouchableOpacity style={[styles.headerToggle, compact ? styles.hidden : null]} onPress={() => { Keyboard.dismiss(); setHeaderOpen(open => !open); }}>
+        <Text style={[styles.headerToggleText, !stockReady ? { color: 'red' } : null]} numberOfLines={1}>
+          {headerOpen ? 'Header' : headerSummary}
+        </Text>
+        <Text style={styles.headerToggleArrow}>{headerOpen ? '▲' : '▼'}</Text>
+      </TouchableOpacity>
+
+      {headerOpen ?
+        <ScrollView style={[styles.header, compact ? styles.hidden : null]} keyboardShouldPersistTaps='handled'>
+
+          {/* The location of the server, it cannot change */}
+          <ChoiceField
+            title='From Location'
+            value={location ? `${location.locationCode} - ${location.locationDescription}` : 'Open the settings'}
+            valueStyle={!location ? { color: 'red' } : null}
+            onPress={!location ? () => navigation.navigate('TransferSettings') : undefined}
+            style={{ borderRightWidth: 0 }}
           />
-          <Text style={styles.pillButtonText} numberOfLines={1}>{multiple ? 'Multiple Locations' : 'Multiple'}</Text>
-        </TouchableOpacity>
-        {!multiple ?
-          <TouchableOpacity style={[styles.pillButton, styles.destinationButton]} onPress={() => setDestinationPickerVisible(true)}>
-            <Text style={styles.pillButtonText} numberOfLines={1}>
-              {header.destination === '' ? 'Transfer To' : `To ${header.destination}${destination ? ' - ' + destination.locationDescription : ''}`} ▾
-            </Text>
-          </TouchableOpacity> :
-          <></>}
-        <TouchableOpacity style={[styles.pillButton, styles.detailsButton, header.deliverBy !== '' || header.remarks !== '' ? styles.detailsButtonFilled : null]}
-          onPress={() => setDetailsVisible(true)}>
-          <Text style={styles.pillButtonText}>✎</Text>
-        </TouchableOpacity>
-      </View>
+
+          <View style={choiceRowStyle.row}>
+            <View style={styles.fieldHalf}>
+              <ChoiceField
+                title='Server'
+                value={settings.server === '' ? 'Not Defined' : settings.server}
+                onPress={() => navigation.navigate('TransferSettings')}
+                style={{ borderBottomWidth: 0 }}
+              />
+            </View>
+            <View style={styles.fieldHalf}>
+              <ChoiceField
+                title='Machine'
+                value={settings.machineName === '' ? 'Not Defined' : settings.machineName}
+                onPress={() => navigation.navigate('TransferSettings')}
+                style={{ borderRightWidth: 0, borderBottomWidth: 0 }}
+              />
+            </View>
+          </View>
+
+          <ChoiceField
+            title='Stock'
+            value={stockText}
+            valueStyle={!stockReady ? { color: 'red' } : null}
+            onPress={StockChoice}
+            style={{ borderRightWidth: 0 }}
+          />
+
+          <ChoiceField
+            title='Deliver By / Remarks'
+            value={[header.deliverBy, header.remarks].filter(text => text !== '').join('  ·  ') || 'None'}
+            onPress={() => setDetailsVisible(true)}
+            style={{ borderRightWidth: 0 }}
+          />
+
+          {/* Way of work, destination (one location) */}
+          <View style={styles.barContainer}>
+            <TouchableOpacity style={[styles.pillButton, styles.multipleButton, multiple ? { flex: 1 } : null]} onPress={ToggleMultiple}>
+              <Image
+                source={multiple ? require('../assets/icons/checked.png') : require('../assets/icons/unchecked.png')}
+                style={[styles.checkImage, { opacity: summary.lines > 0 ? 0.5 : 1 }]}
+                resizeMode='contain'
+              />
+              <Text style={styles.pillButtonText} numberOfLines={1}>{multiple ? 'Multiple Locations' : 'Multiple'}</Text>
+            </TouchableOpacity>
+            {!multiple ?
+              <TouchableOpacity style={[styles.pillButton, styles.destinationButton]} onPress={() => setDestinationPickerVisible(true)}>
+                <Text style={styles.pillButtonText} numberOfLines={1}>
+                  {header.destination === '' ? 'Transfer To' : `To ${header.destination}${destination ? ' - ' + destination.locationDescription : ''}`} ▾
+                </Text>
+              </TouchableOpacity> :
+              <></>}
+          </View>
+
+        </ScrollView> :
+        <></>}
 
       {/* Search field (tap to switch barcode / reference) + scan */}
       <View style={[styles.entryContainer, compact ? styles.hidden : null]}>
@@ -713,8 +852,7 @@ const TransferScanScreen = () => {
           value={scanText}
           placeholder={`Scan ${SEARCH_FIELD_LABELS[searchField]}`}
           showSoftInputOnFocus={typing}
-          onPressIn={() => { if (!typing) Keyboard.dismiss(); }}
-          autoFocus={true}
+          onPressIn={() => { setHeaderOpen(false); if (!typing) Keyboard.dismiss(); }}
           autoCapitalize='characters'
           autoCorrect={false}
           blurOnSubmit={false}
@@ -790,6 +928,9 @@ const TransferScanScreen = () => {
           <View style={styles.actionsContainer}>
             <TouchableOpacity style={[styles.actionButton, styles.saveTransferButton, { opacity: summary.lines === 0 ? 0.5 : 1 }]} onPress={SaveTransfer}>
               <Text style={styles.actionButtonText}>Save Transfer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionButton, styles.clearTransferButton, { opacity: summary.lines === 0 ? 0.5 : 1 }]} onPress={ClearTransfer}>
+              <Text style={styles.actionButtonText}>Clear</Text>
             </TouchableOpacity>
           </View> :
           <></>}
@@ -1000,8 +1141,39 @@ const styles = StyleSheet.create({
     fontSize: FontSize(12),
   },
   saveTransferButton: {
-    width: '100%',
     backgroundColor: Colors.brandGreen,
+  },
+  clearTransferButton: {
+    backgroundColor: 'red',
+  },
+  headerToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 38,
+    paddingLeft: 10,
+    paddingRight: 8,
+    backgroundColor: Colors.listItemBackColor,
+    borderBottomWidth: 1,
+    borderBottomColor: 'silver',
+  },
+  headerToggleText: {
+    flex: 1,
+    color: Colors.brandBlue,
+    fontSize: FontSize(16),
+    fontWeight: 'bold',
+  },
+  headerToggleArrow: {
+    color: Colors.brandBlue,
+    fontSize: FontSize(14),
+    marginLeft: 6,
+  },
+  // folds the fields away when the screen is too small for the header and the scan
+  header: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
+  fieldHalf: {
+    width: '50%',
   },
   currentContainerCompact: {
     paddingVertical: 3,

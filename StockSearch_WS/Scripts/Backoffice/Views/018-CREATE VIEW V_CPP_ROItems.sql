@@ -5,6 +5,7 @@ GO
 -- The items a Receiving Order can receive (same conditions as FrmDO "Receiving Order") :
 -- active, current, trading / barcode / expiry items, not consignment, not in production use, not a returned book,
 -- not the normal item of a consignment pair (V_StockNormalCons)
+-- itemMeasType / itemConsFactor : measure type of the sub unit (P pieces, W weight, L length) and the sub unit qty of 1 unit (totals of FrmDO)
 -- itemTag (STK_NEWUSED) and itemBrand : checked against the user privileges (V_CPP_UserItemTags, V_CPP_UserPurchaseAccess)
 CREATE OR ALTER VIEW V_CPP_ROItems
 AS
@@ -32,6 +33,12 @@ AS
             ISNULL(STK_UNITPACK, 1) [itemUnitPack] ,
             ISNULL(STK_OPERATOR, '*') [itemOperator] ,
             ISNULL(MEASUB.Meas_Sign, '*') [itemMeasSign] ,
+            UPPER(ISNULL(MEASUB.Meas_Type, 'P')) [itemMeasType] ,
+            CONVERT(DECIMAL(18, 6), CASE WHEN ISNULL(STK_UNITPACK, 1) = 0 OR ISNULL(MEASUB.Meas_Value, 1) = 0 THEN 0
+                                         WHEN ISNULL(MEASUB.Meas_Sign, '*') = '/' AND LTRIM(RTRIM(ISNULL(STK_OPERATOR, '*'))) <> '/' THEN ISNULL(STK_UNITPACK, 1) / ISNULL(MEASUB.Meas_Value, 1)
+                                         WHEN ISNULL(MEASUB.Meas_Sign, '*') = '/' THEN 1.0 / ISNULL(STK_UNITPACK, 1) / ISNULL(MEASUB.Meas_Value, 1)
+                                         WHEN LTRIM(RTRIM(ISNULL(STK_OPERATOR, '*'))) <> '/' THEN ISNULL(STK_UNITPACK, 1) * ISNULL(MEASUB.Meas_Value, 1)
+                                         ELSE 1.0 / ISNULL(STK_UNITPACK, 1) * ISNULL(MEASUB.Meas_Value, 1) END) [itemConsFactor] ,
             ISNULL(MEASUB.Meas_Value, 1) [itemMeasValue]
     FROM    dbo.STK04_STKFIL
             INNER JOIN dbo.stk04_measurements MEASU ON MEASU.Meas_unit = STK_UNIT

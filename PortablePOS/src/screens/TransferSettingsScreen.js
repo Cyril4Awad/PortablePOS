@@ -9,7 +9,6 @@ import TextBoxField from '../components/controls/TextBoxField';
 import TextBoxNumericField from '../components/controls/TextBoxNumericField';
 import ChoiceField from '../components/controls/ChoiceField';
 import MainButton from '../components/controls/MainButton';
-import PhysicalCountFilterPicker from '../components/lists/physicalCount/PhysicalCountFilterPicker';
 import TransferData from '../data/TransferData';
 import TransferDatabase from '../database/TransferDatabase';
 import TransferSettings from '../configuration/TransferSettings';
@@ -17,7 +16,8 @@ import { CheckServer, CheckMachineName, CheckPageSize } from '../variables/Trans
 
 const CONNECTION_TIMEOUT_MS = 8000;
 
-// Server, location we transfer from (the locations of the server, not the head office), machine name and download size
+// Server, machine name and download size. The location we transfer from is the one of the server (LocCode of its Web.config),
+// read by the connection test, it cannot be changed
 const TransferSettingsScreen = () => {
 
   const [server, setServer] = useState('');
@@ -25,30 +25,30 @@ const TransferSettingsScreen = () => {
   const [machineName, setMachineName] = useState('');
   const [pageSize, setPageSize] = useState('');
 
-  // The locations of the server : loaded by the connection test
-  const [locations, setLocations] = useState([]);
-  const [locationPickerVisible, setLocationPickerVisible] = useState(false);
-
   // { state: 'checking' | 'connected' | 'error', text }
   const [connection, setConnection] = useState(null);
 
   const TestConnection = (serverAddress) => {
     if (serverAddress === '') {
       setConnection(null);
-      setLocations([]);
-      return Promise.resolve([]);
+      return Promise.resolve(null);
     }
     setConnection({ state: 'checking', text: 'Checking...' });
     return TransferData.GetTransferLocations(serverAddress, CONNECTION_TIMEOUT_MS)
       .then(loadedLocations => {
-        setLocations(loadedLocations);
+        const current = loadedLocations.find(row => Number(row.isCurrent) === 1);
+        if (!current) {
+          setConnection({ state: 'error', text: 'Connected - The location of the server is not a transfer location' });
+          return null;
+        }
+        const serverLocation = { locationCode: current.locationCode, locationDescription: current.locationDescription };
+        setLocation(serverLocation);
         setConnection({ state: 'connected', text: `Connected - ${loadedLocations.length} Locations` });
-        return loadedLocations;
+        return serverLocation;
       })
       .catch(error => {
-        setLocations([]);
         setConnection({ state: 'error', text: `Not Connected - ${error.message}` });
-        return [];
+        return null;
       });
   };
 
@@ -63,59 +63,41 @@ const TransferSettingsScreen = () => {
     })().catch(error => alert(error.message));
   }, []);
 
-  const OpenLocations = async () => {
-    const serverAddress = server.trim().toLowerCase();
-    const errorMessage = CheckServer(serverAddress);
-    if (errorMessage !== '') {
-      alert(errorMessage);
-      return;
-    }
-    const loadedLocations = locations.length > 0 ? locations : await TestConnection(serverAddress);
-    if (loadedLocations.length === 0) {
-      alert('The locations of the server cannot be read, check the server');
-      return;
-    }
-    setLocationPickerVisible(true);
-  };
-
-  // The transfer being prepared belongs to the location : it cannot change while the transfer has lines
-  const ChooseLocation = async (code) => {
-    setLocationPickerVisible(false);
-    const picked = locations.find(row => row.locationCode === code);
-    if (!picked || picked.locationCode === location?.locationCode) return;
-
-    const summary = await TransferDatabase.GetSummary();
-    const info = await TransferDatabase.GetInfo();
-    if (summary.lines > 0 && info && info.location !== picked.locationCode) {
-      alert(`The transfer has ${summary.lines} lines from location ${info.location}, upload or clear them first`);
-      return;
-    }
-    setLocation(picked);
-  };
-
   const SaveSettings = async () => {
 
     const serverAddress = server.trim().toLowerCase();
     const machine = machineName.trim().toUpperCase();
 
-    const errorMessage = CheckServer(serverAddress) || CheckMachineName(machine) || CheckPageSize(pageSize)
-      || (location === null ? 'Choose the location to transfer from' : '');
+    const errorMessage = CheckServer(serverAddress) || CheckMachineName(machine) || CheckPageSize(pageSize);
     if (errorMessage !== '') {
       alert(errorMessage);
       return;
     }
 
+    // The location of the server (it may be another server than the one saved)
+    const serverLocation = await TestConnection(serverAddress);
+    if (serverLocation === null) {
+      alert('The location of the server cannot be read, check the server');
+      return;
+    }
+
+    // The transfer being prepared belongs to its location : it cannot change while the transfer has lines
+    const summary = await TransferDatabase.GetSummary();
+    const info = await TransferDatabase.GetInfo();
+    if (summary.lines > 0 && info && info.location !== serverLocation.locationCode) {
+      alert(`The transfer has ${summary.lines} lines from location ${info.location}, upload or clear them before changing the server`);
+      return;
+    }
+
     await TransferSettings.saveServer(serverAddress);
-    await TransferSettings.saveLocation(location);
+    await TransferSettings.saveLocation(serverLocation);
     await TransferSettings.saveMachineName(machine);
     await TransferSettings.savePageSize(parseInt(pageSize, 10));
     setServer(serverAddress);
     setMachineName(machine);
-    TestConnection(serverAddress);
 
-    const info = await TransferDatabase.GetInfo();
-    alert(info && info.location !== location.locationCode
-      ? `Settings Saved - Download the stock of location ${location.locationCode}`
+    alert(info && info.location !== serverLocation.locationCode
+      ? `Settings Saved - Download the stock of location ${serverLocation.locationCode}`
       : 'Settings Saved');
 
   };
@@ -123,19 +105,9 @@ const TransferSettingsScreen = () => {
   return (
     <View style={styles.container}>
 
-      <PhysicalCountFilterPicker
-        visible={locationPickerVisible}
-        title='Transfer From'
-        options={locations.map(row => ({ code: row.locationCode, description: `${row.locationCode} - ${row.locationDescription}` }))}
-        selected={location ? [location.locationCode] : []}
-        multiple={false}
-        onSubmit={(codes) => ChooseLocation(codes[0])}
-        onCancel={() => setLocationPickerVisible(false)}
-      />
-
       {!Sizing.isPortableScanner ?
         <ScreenHeader
-          description='Server, location to transfer from and machine name of the transfer.'
+          description='Server and machine name of the transfer, the location is the one of the server.'
           imageSource={require('../assets/icons/settings.png')}
         /> :
         <></>}
@@ -155,7 +127,7 @@ const TransferSettingsScreen = () => {
             numberOfLines={1}
             autoCapitalize='none'
             autoCorrect={false}
-            onChangeText={text => { setServer(text); setLocations([]); }} />
+            onChangeText={setServer} />
 
           {connection ?
             <Text numberOfLines={1} style={[styles.connectionText, {
@@ -169,8 +141,7 @@ const TransferSettingsScreen = () => {
 
         <ChoiceField
           title='Transfer From Location'
-          value={location ? `${location.locationCode} - ${location.locationDescription}` : 'Not Selected'}
-          onPress={OpenLocations}
+          value={location ? `${location.locationCode} - ${location.locationDescription}` : 'Test the connection'}
           style={{ borderRightWidth: 0, borderTopWidth: 1 }}
         />
 
