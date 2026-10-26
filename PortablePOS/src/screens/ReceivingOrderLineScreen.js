@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Keyboard, Alert, Modal, Image } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Keyboard, Modal, Image } from 'react-native';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
@@ -7,6 +7,7 @@ import MainButton from '../components/controls/MainButton';
 import ReceivingOrderData from '../data/ReceivingOrderData';
 import ROChoiceModal from '../components/lists/receivingOrder/ROChoiceModal';
 import { useReceivingOrderDraft, GetDraft, SetLines, NextID } from '../variables/ReceivingOrderDraft';
+import MessageBox from '../components/MessageBox';
 import {
     STATUS_LABELS, STATUS_ORDER, isLotItem, ParseQty, FormatQty, LineQty, LineBarcodes, Plural,
     MaskLotDate, CheckExpiry, CheckProduction, BarcodeCheckDigitOk, isReadOnlyMode, VatLabel, FormatCost, LineCost,
@@ -76,7 +77,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
 
     // An error is an alert (seen over the lot window), an information is shown under the item
     const ShowMessage = (text, isError = false) => {
-        if (isError) Alert.alert(item.itemReference, text);
+        if (isError) MessageBox.alert(item.itemReference, text);
         else setMessage({ text, isError });
     };
 
@@ -427,6 +428,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
             itemUnit: item.itemUnit,
             itemBarcode: item.itemBarcode,
             itemQtyControl: item.itemQtyControl,
+            itemSubUnit: item.itemSubUnit,
             itemMeasType: item.itemMeasType,
             itemConsFactor: item.itemConsFactor,
             itemVatType: item.itemVatType,

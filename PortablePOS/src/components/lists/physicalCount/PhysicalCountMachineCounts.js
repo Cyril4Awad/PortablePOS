@@ -47,7 +47,7 @@ const PhysicalCountMachineCounts = props => {
         return (
             <TouchableOpacity style={[styles.countRow, { opacity: open ? 1 : 0.5 }]} disabled={!open} onPress={() => props.onPick(item.countNumber)}>
                 <View style={styles.countTextContainer}>
-                    <Text style={styles.countNumberText}>Count {item.countNumber}</Text>
+                    <Text style={styles.countNumberText}>Count # {item.countNumber}</Text>
                     <Text style={styles.countInfoText} numberOfLines={1}>
                         {item.dateCount}   {item.nbrItems} Items{onDevice ? '   ·   On This Device' : ''}
                     </Text>

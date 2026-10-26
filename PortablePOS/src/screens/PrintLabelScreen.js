@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Keyboard, Image, Modal, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Keyboard, Image, Modal } from 'react-native';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
@@ -15,6 +15,7 @@ import PrintLabelCodePicker from '../components/lists/printLabel/PrintLabelCodeP
 import PrintLabelData from '../data/PrintLabelData';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
 import { ItemRecIDFromLink } from '../variables/ItemLink';
+import MessageBox from '../components/MessageBox';
 
 const MAX_QTY = 500;
 
@@ -384,7 +385,7 @@ const PrintLabelScreen = () => {
       {/* One line : a long message is cut, a tap shows all of it */}
       <TouchableOpacity style={[styles.statusContainer, { backgroundColor: status?.isError ? 'red' : Colors.brandBlue }]}
         disabled={!status}
-        onPress={() => Alert.alert(status.isError ? 'Error' : 'Message', status.text, [{ text: 'OK', onPress: focusScanner }])}>
+        onPress={() => MessageBox.alert(status.isError ? 'Error' : 'Message', status.text, [{ text: 'OK', onPress: focusScanner }])}>
         <Text style={styles.statusText} numberOfLines={1}>{status ? status.text : 'Ready to scan'}</Text>
       </TouchableOpacity>
 

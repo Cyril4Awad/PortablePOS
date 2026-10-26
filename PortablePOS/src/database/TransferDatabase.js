@@ -1,18 +1,18 @@
 import { enablePromise, openDatabase } from 'react-native-sqlite-storage';
 
-// Local storage of Transfer (works offline)
-// TR_Info : one row, the download of the stock of the location we transfer from (counts, resume points)
-// TR_Items / TR_Lots / TR_Barcodes / TR_Locations : the downloaded stock, replaced by every new download
-// TR_Header : one row, the transfer being prepared (one or multiple locations, destination, deliver by, remarks)
-// TR_Lines : one line per lot + destination, with its own copy of the item and lot (kept by a new download)
+// Local storage of Transfer : the transfer being prepared (kept until it is saved on the server), the stock is read online
+// TR_Info : one row, the location of the server and the decimals of the quantities (read from the server when the screen opens)
+// TR_Locations : the destinations (read from the server when the screen opens, kept for a server not reachable)
+// TR_Header : one row, the transfer being prepared (one or multiple locations, destination, save id)
+// TR_Lines : one line per lot + destination, with its own copy of the item and lot and the available qty of the lot read last
 // Quantities are stored as whole thousandths (12.5 => 12500), so totals never drift
 
 const dbName = 'transfer.db';
 
 enablePromise(true);
 
-// Version 2 : the single references of the items (a scan matches them like a barcode), filled by the next download
-const schemaVersion = 2;
+// Version 4 : the stock is online, the downloaded tables are removed, the lines keep the available qty of their lot
+const schemaVersion = 4;
 
 // Kept as a promise so screens loading at the same time share one connection
 let lcDBPromise = null;
@@ -38,51 +38,7 @@ const createTables = async (db) => {
                          server TEXT NOT NULL,
                          location TEXT NOT NULL,
                          locationDescription TEXT,
-                         downloadDate TEXT,
-                         decimals INTEGER,
-                         currencyLC TEXT,
-                         currencyCC TEXT,
-                         itemsCount INTEGER,
-                         lotsCount INTEGER,
-                         barcodesCount INTEGER,
-                         itemsStored INTEGER NOT NULL DEFAULT 0,
-                         lotsStored INTEGER NOT NULL DEFAULT 0,
-                         barcodesStored INTEGER NOT NULL DEFAULT 0,
-                         lastItemRecID TEXT NOT NULL DEFAULT '',
-                         lastLotRecID TEXT NOT NULL DEFAULT '',
-                         lastBarcodeRecID TEXT NOT NULL DEFAULT '',
-                         complete INTEGER NOT NULL DEFAULT 0 )`);
-
-  await db.executeSql(`CREATE TABLE IF NOT EXISTS TR_Items (
-                         itemRecID TEXT PRIMARY KEY,
-                         itemReference TEXT,
-                         itemReferenceUpper TEXT,
-                         itemDescription TEXT,
-                         itemDescriptionUpper TEXT,
-                         itemUnit TEXT,
-                         itemSingleRef1Upper TEXT,
-                         itemSingleRef2Upper TEXT,
-                         priceLC REAL,
-                         priceCC REAL )`);
-  await db.executeSql('CREATE INDEX IF NOT EXISTS IX_TR_Items_Reference ON TR_Items (itemReferenceUpper)');
-
-  // lotAvailable : thousandths
-  await db.executeSql(`CREATE TABLE IF NOT EXISTS TR_Lots (
-                         lotRecID TEXT PRIMARY KEY,
-                         itemRecID TEXT NOT NULL,
-                         lotExpiry TEXT,
-                         lotBatch TEXT,
-                         lotColor TEXT,
-                         lotGrid TEXT,
-                         lotSize TEXT,
-                         lotAvailable INTEGER NOT NULL DEFAULT 0 )`);
-  await db.executeSql('CREATE INDEX IF NOT EXISTS IX_TR_Lots_Item ON TR_Lots (itemRecID)');
-
-  await db.executeSql(`CREATE TABLE IF NOT EXISTS TR_Barcodes (
-                         codeRecID TEXT PRIMARY KEY,
-                         itemRecID TEXT NOT NULL,
-                         codeValueUpper TEXT )`);
-  await db.executeSql('CREATE INDEX IF NOT EXISTS IX_TR_Barcodes_Value ON TR_Barcodes (codeValueUpper)');
+                         decimals INTEGER )`);
 
   await db.executeSql(`CREATE TABLE IF NOT EXISTS TR_Locations (
                          locationCode TEXT PRIMARY KEY,
@@ -94,9 +50,10 @@ const createTables = async (db) => {
                          multipleLocations INTEGER NOT NULL DEFAULT 0,
                          destination TEXT NOT NULL DEFAULT '',
                          deliverBy TEXT NOT NULL DEFAULT '',
-                         remarks TEXT NOT NULL DEFAULT '' )`);
+                         remarks TEXT NOT NULL DEFAULT '',
+                         saveID TEXT NOT NULL DEFAULT '' )`);
 
-  // state : 1 not uploaded, 2 uploaded (the upload comes later)
+  // lotAvailable : the available qty of the lot when it was read last (all the lines of a lot have the same)
   await db.executeSql(`CREATE TABLE IF NOT EXISTS TR_Lines (
                          lineID INTEGER PRIMARY KEY AUTOINCREMENT,
                          lotRecID TEXT NOT NULL,
@@ -112,6 +69,7 @@ const createTables = async (db) => {
                          lotSize TEXT,
                          priceLC REAL,
                          priceCC REAL,
+                         lotAvailable INTEGER NOT NULL DEFAULT 0,
                          qty INTEGER NOT NULL DEFAULT 0,
                          state INTEGER NOT NULL DEFAULT 1,
                          updatedAt TEXT )`);
@@ -119,18 +77,32 @@ const createTables = async (db) => {
 
 };
 
-// Columns added to the existing tables (the downloaded stock and the transfer are kept), then the indexes on them
+// The tables of the versions before : the columns added, the downloaded stock removed (the transfer being prepared is kept)
 const upgradeTables = async (db) => {
   const [result] = await db.executeSql('PRAGMA user_version');
-  if (result.rows.item(0).user_version < 2) {
-    const [columns] = await db.executeSql('PRAGMA table_info(TR_Items)');
+  const version = result.rows.item(0).user_version;
+  const columnsOf = async (table) => {
+    const [columns] = await db.executeSql(`PRAGMA table_info(${table})`);
     const names = [];
     for (let index = 0; index < columns.rows.length; index++) names.push(columns.rows.item(index).name);
-    if (!names.includes('itemSingleRef1Upper')) await db.executeSql('ALTER TABLE TR_Items ADD COLUMN itemSingleRef1Upper TEXT');
-    if (!names.includes('itemSingleRef2Upper')) await db.executeSql('ALTER TABLE TR_Items ADD COLUMN itemSingleRef2Upper TEXT');
+    return names;
+  };
+  if (version < 4) {
+    if (!(await columnsOf('TR_Header')).includes('saveID')) await db.executeSql("ALTER TABLE TR_Header ADD COLUMN saveID TEXT NOT NULL DEFAULT ''");
+    if (!(await columnsOf('TR_Lines')).includes('lotAvailable')) {
+      await db.executeSql('ALTER TABLE TR_Lines ADD COLUMN lotAvailable INTEGER NOT NULL DEFAULT 0');
+      // the available qty of the lot downloaded, read again from the server when the screen opens
+      const [tables] = await db.executeSql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'TR_Lots'");
+      if (tables.rows.length > 0) {
+        await db.executeSql('UPDATE TR_Lines SET lotAvailable = IFNULL((SELECT lotAvailable FROM TR_Lots WHERE TR_Lots.lotRecID = TR_Lines.lotRecID), 0)');
+      }
+    }
+    await db.executeSql('DROP TABLE IF EXISTS TR_Barcodes');
+    await db.executeSql('DROP TABLE IF EXISTS TR_Lots');
+    await db.executeSql('DROP TABLE IF EXISTS TR_Items');
+    await db.executeSql('DROP TABLE IF EXISTS TR_Info');
+    await createTables(db);
   }
-  await db.executeSql('CREATE INDEX IF NOT EXISTS IX_TR_Items_SingleRef1 ON TR_Items (itemSingleRef1Upper)');
-  await db.executeSql('CREATE INDEX IF NOT EXISTS IX_TR_Items_SingleRef2 ON TR_Items (itemSingleRef2Upper)');
   await db.executeSql(`PRAGMA user_version = ${schemaVersion}`);
 };
 
@@ -163,27 +135,21 @@ const likeText = (text) => text.replace(/[!%_]/g, character => '!' + character);
 
 const upper = (text) => (text ?? '').toString().toUpperCase();
 
-const toMilli = (value) => Math.round(Number(value || 0) * 1000);
-
-//#region Download
+//#region Server info and destinations
 
 const GetInfo = async () => {
   const rows = await query('SELECT * FROM TR_Info WHERE infoID = 1');
   return rows.length > 0 ? rows[0] : null;
 };
 
-// Starts a new download : the previous stock is replaced, the transfer being prepared is kept
-const StartDownload = (server, info, locations) => {
+// The location of the server and the destinations, read from the server
+// info : { locationCode, locationDescription, decimals }, locations : [{ locationCode, locationDescription }]
+const SaveServerInfo = (server, info, locations) => {
   const statements = [
-    ['DELETE FROM TR_Barcodes', []],
-    ['DELETE FROM TR_Lots', []],
-    ['DELETE FROM TR_Items', []],
     ['DELETE FROM TR_Locations', []],
     ['DELETE FROM TR_Info', []],
-    [`INSERT INTO TR_Info (infoID, server, location, locationDescription, decimals, currencyLC, currencyCC, itemsCount, lotsCount, barcodesCount)
-      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [server, info.locationCode, info.locationDescription, parseInt(info.decimals, 10) || 0, info.currencyLC, info.currencyCC,
-        info.itemsCount, info.lotsCount, info.barcodesCount]],
+    ['INSERT INTO TR_Info (infoID, server, location, locationDescription, decimals) VALUES (1, ?, ?, ?, ?)',
+      [server, info.locationCode, info.locationDescription, parseInt(info.decimals, 10) || 0]],
   ];
   locations.forEach(location => statements.push([
     'INSERT OR REPLACE INTO TR_Locations (locationCode, locationDescription) VALUES (?, ?)',
@@ -191,104 +157,7 @@ const StartDownload = (server, info, locations) => {
   return executeInTransaction(statements);
 };
 
-const SaveItemsPage = (items) => {
-  const statements = items.map(item => [
-    `INSERT OR REPLACE INTO TR_Items (itemRecID, itemReference, itemReferenceUpper, itemDescription, itemDescriptionUpper, itemUnit,
-                                      itemSingleRef1Upper, itemSingleRef2Upper, priceLC, priceCC)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [item.itemRecID, item.itemReference, upper(item.itemReference), item.itemDescription, upper(item.itemDescription),
-      item.itemUnit, upper(item.itemSingleRef1), upper(item.itemSingleRef2), Number(item.priceLC) || 0, Number(item.priceCC) || 0]]);
-  statements.push([
-    'UPDATE TR_Info SET itemsStored = (SELECT COUNT(*) FROM TR_Items), lastItemRecID = ? WHERE infoID = 1',
-    [items[items.length - 1].itemRecID]]);
-  return executeInTransaction(statements);
-};
-
-const SaveLotsPage = (lots) => {
-  const statements = lots.map(lot => [
-    `INSERT OR REPLACE INTO TR_Lots (lotRecID, itemRecID, lotExpiry, lotBatch, lotColor, lotGrid, lotSize, lotAvailable)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [lot.lotRecID, lot.itemRecID, lot.lotExpiry, lot.lotBatch, lot.lotColor, lot.lotGrid, lot.lotSize, toMilli(lot.lotAvailable)]]);
-  statements.push([
-    'UPDATE TR_Info SET lotsStored = (SELECT COUNT(*) FROM TR_Lots), lastLotRecID = ? WHERE infoID = 1',
-    [lots[lots.length - 1].lotRecID]]);
-  return executeInTransaction(statements);
-};
-
-const SaveBarcodesPage = (barcodes) => {
-  const statements = barcodes.map(barcode => [
-    'INSERT OR REPLACE INTO TR_Barcodes (codeRecID, itemRecID, codeValueUpper) VALUES (?, ?, ?)',
-    [barcode.codeRecID, barcode.itemRecID, upper(barcode.codeValue)]]);
-  statements.push([
-    'UPDATE TR_Info SET barcodesStored = (SELECT COUNT(*) FROM TR_Barcodes), lastBarcodeRecID = ? WHERE infoID = 1',
-    [barcodes[barcodes.length - 1].codeRecID]]);
-  return executeInTransaction(statements);
-};
-
-const CompleteDownload = (downloadDate) => execute(
-  'UPDATE TR_Info SET complete = 1, downloadDate = ? WHERE infoID = 1', [downloadDate]);
-
-//#endregion
-
-//#region Stock
-
-const GetItem = async (itemRecID) => {
-  const rows = await query('SELECT * FROM TR_Items WHERE itemRecID = ?', [itemRecID]);
-  return rows.length > 0 ? rows[0] : null;
-};
-
-// A barcode of the item, or one of its single references (an empty single reference never matches : the scan is never empty)
-const FindItemsByBarcode = (barcode) => {
-  const value = upper(barcode.trim());
-  return query(
-    `SELECT * FROM TR_Items
-     WHERE itemSingleRef1Upper = ? OR itemSingleRef2Upper = ?
-           OR itemRecID IN (SELECT itemRecID FROM TR_Barcodes WHERE codeValueUpper = ?)
-     ORDER BY itemReferenceUpper LIMIT 50`, [value, value, value]);
-};
-
-// exact : the whole reference, else its start
-const FindItemsByReference = (text, exact, limit) => {
-  const value = upper(text.trim());
-  return exact
-    ? query('SELECT * FROM TR_Items WHERE itemReferenceUpper = ? ORDER BY itemReferenceUpper LIMIT ?', [value, limit])
-    : query("SELECT * FROM TR_Items WHERE itemReferenceUpper LIKE ? ESCAPE '!' ORDER BY itemReferenceUpper LIMIT ?", [likeText(value) + '%', limit]);
-};
-
-// The items with their available qty in the location (the lots downloaded) and the qty already in the transfer
-// onlyAvailable : the items that have an available qty, text : start of the reference or barcode, any part of the description
-const SearchItems = (text, onlyAvailable, limit) => {
-  const value = upper((text ?? '').trim());
-  const conditions = [];
-  const params = [];
-  if (value !== '') {
-    conditions.push(`(itemReferenceUpper LIKE ? ESCAPE '!' OR itemDescriptionUpper LIKE ? ESCAPE '!'
-                      OR itemSingleRef1Upper LIKE ? ESCAPE '!' OR itemSingleRef2Upper LIKE ? ESCAPE '!'
-                      OR itemRecID IN (SELECT itemRecID FROM TR_Barcodes WHERE codeValueUpper LIKE ? ESCAPE '!'))`);
-    params.push(likeText(value) + '%', '%' + likeText(value) + '%', likeText(value) + '%', likeText(value) + '%', likeText(value) + '%');
-  }
-  if (onlyAvailable) conditions.push('itemRecID IN (SELECT itemRecID FROM TR_Lots)');
-  params.push(limit);
-  return query(
-    `SELECT TR_Items.*,
-            IFNULL((SELECT SUM(lotAvailable) FROM TR_Lots WHERE TR_Lots.itemRecID = TR_Items.itemRecID), 0) available,
-            IFNULL((SELECT SUM(qty) FROM TR_Lines WHERE TR_Lines.itemRecID = TR_Items.itemRecID), 0) transferQty
-     FROM   TR_Items
-     ${conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''}
-     ORDER BY itemReferenceUpper LIMIT ?`, params);
-};
-
-// The lots of the item with the qty already in the transfer (all the destinations)
-const LOT_SELECT = `SELECT TR_Lots.*, IFNULL((SELECT SUM(qty) FROM TR_Lines WHERE TR_Lines.lotRecID = TR_Lots.lotRecID), 0) transferQty FROM TR_Lots`;
-
-const GetItemLots = (itemRecID) => query(`${LOT_SELECT} WHERE itemRecID = ? ORDER BY lotExpiry, lotRecID`, [itemRecID]);
-
-const GetLot = async (lotRecID) => {
-  const rows = await query(`${LOT_SELECT} WHERE lotRecID = ?`, [lotRecID]);
-  return rows.length > 0 ? rows[0] : null;
-};
-
-// The destinations : the locations downloaded with the stock, except the one we transfer from
+// The destinations : the locations of the server, except the one we transfer from
 const GetDestinations = (fromLocation) => query(
   'SELECT * FROM TR_Locations WHERE locationCode <> ? ORDER BY locationCode', [fromLocation]);
 
@@ -300,7 +169,7 @@ const GetHeader = async () => {
   const rows = await query('SELECT * FROM TR_Header WHERE headerID = 1');
   if (rows.length > 0) return rows[0];
   await execute('INSERT OR IGNORE INTO TR_Header (headerID) VALUES (1)');
-  return { headerID: 1, multipleLocations: 0, destination: '', deliverBy: '', remarks: '' };
+  return { headerID: 1, multipleLocations: 0, destination: '', deliverBy: '', remarks: '', saveID: '' };
 };
 
 // The mode can only change while the transfer has no line (checked by the screen too)
@@ -311,32 +180,41 @@ const SetMultipleLocations = async (multiple) => {
   await execute('UPDATE TR_Header SET multipleLocations = ? WHERE headerID = 1', [multiple ? 1 : 0]);
 };
 
-// One location : the destination of the transfer and of all its lines
+// One location : the destination of the transfer (it cannot change while the transfer has lines, checked by the screen)
 const SetDestination = async (destination) => {
   await GetHeader();
-  await executeInTransaction([
-    ['UPDATE TR_Header SET destination = ? WHERE headerID = 1', [destination]],
-    ['UPDATE TR_Lines SET destination = ?, state = 1 WHERE destination <> ?', [destination, destination]],
-  ]);
+  await execute('UPDATE TR_Header SET destination = ? WHERE headerID = 1', [destination]);
 };
 
-const SaveHeaderTexts = async (deliverBy, remarks) => {
-  await GetHeader();
-  await execute('UPDATE TR_Header SET deliverBy = ?, remarks = ? WHERE headerID = 1', [deliverBy, remarks]);
+// The id of the save of this transfer : kept until the server answers, so a save sent again is not saved twice
+const GetSaveID = async () => {
+  const header = await GetHeader();
+  if (header.saveID !== '') return header.saveID;
+  const saveID = Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 1679616).toString(36).toUpperCase().padStart(4, '0');
+  await execute('UPDATE TR_Header SET saveID = ? WHERE headerID = 1', [saveID]);
+  return saveID;
 };
+
+// The transfer is saved on the server : its lines are removed, the next transfer gets a new save id
+const CompleteSave = () => executeInTransaction([
+  ['DELETE FROM TR_Lines', []],
+  ["UPDATE TR_Header SET saveID = '', deliverBy = '', remarks = '' WHERE headerID = 1", []],
+]);
 
 //#endregion
 
 //#region Lines
 
-// { lines, lots, qty, destinations, pending }
+// { lines, lots, qty, destinations }
 const GetSummary = async () => {
   const rows = await query(
-    `SELECT COUNT(*) lines, COUNT(DISTINCT lotRecID) lots, IFNULL(SUM(qty), 0) qty, COUNT(DISTINCT destination) destinations,
-            IFNULL(SUM(CASE WHEN state = 1 THEN 1 ELSE 0 END), 0) pending
+    `SELECT COUNT(*) lines, COUNT(DISTINCT lotRecID) lots, IFNULL(SUM(qty), 0) qty, COUNT(DISTINCT destination) destinations
      FROM TR_Lines`);
   return rows[0];
 };
+
+// All the lines (sent by Save Transfer), in the order they were added
+const GetAllLines = () => query('SELECT * FROM TR_Lines ORDER BY lineID');
 
 // The last lines first, searched by the item reference / description, the lot or the destination
 const GetLines = (searchText, limit) => {
@@ -350,6 +228,20 @@ const GetLines = (searchText, limit) => {
      ORDER BY updatedAt DESC, lineID DESC LIMIT ?`, [part, part, part, part, limit]);
 };
 
+// The qty of a lot in the transfer (all the destinations)
+const GetLotTransferQty = async (lotRecID) => {
+  const rows = await query('SELECT IFNULL(SUM(qty), 0) qty FROM TR_Lines WHERE lotRecID = ?', [lotRecID]);
+  return rows[0].qty;
+};
+
+// The qty of every lot in the transfer : { [lotRecID]: qty }
+const GetTransferQtys = async () => {
+  const rows = await query('SELECT lotRecID, SUM(qty) qty FROM TR_Lines GROUP BY lotRecID');
+  const qtys = {};
+  rows.forEach(row => { qtys[row.lotRecID] = row.qty; });
+  return qtys;
+};
+
 // The qty of a lot per destination : { [destination]: qty }
 const GetLotQtys = async (lotRecID) => {
   const rows = await query('SELECT destination, qty FROM TR_Lines WHERE lotRecID = ?', [lotRecID]);
@@ -358,12 +250,29 @@ const GetLotQtys = async (lotRecID) => {
   return qtys;
 };
 
+// The lots of the transfer
+const GetLotRecIDs = async () => (await query('SELECT DISTINCT lotRecID FROM TR_Lines')).map(row => row.lotRecID);
+
+// The available qty read from the server : { [lotRecID]: qty }, a lot not in it has none any more
+const SetLotsAvailable = (available) => executeInTransaction([
+  ['UPDATE TR_Lines SET lotAvailable = 0', []],
+  ...Object.keys(available).map(lotRecID => ['UPDATE TR_Lines SET lotAvailable = ? WHERE lotRecID = ?', [available[lotRecID], lotRecID]]),
+]);
+
+// The available qty of one lot read from the server
+const SetLotAvailable = (lotRecID, qty) => execute('UPDATE TR_Lines SET lotAvailable = ? WHERE lotRecID = ?', [qty, lotRecID]);
+
+// item : { itemRecID, itemReference, itemDescription, itemUnit }
+// lot : { lotRecID, lotExpiry, lotBatch, lotColor, lotGrid, lotSize, lotAvailable }
 const lineInsert = (item, lot, destination, now) => [
   `INSERT OR IGNORE INTO TR_Lines (lotRecID, destination, itemRecID, itemReference, itemDescription, itemUnit,
-                                   lotExpiry, lotBatch, lotColor, lotGrid, lotSize, priceLC, priceCC, qty, state, updatedAt)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)`,
+                                   lotExpiry, lotBatch, lotColor, lotGrid, lotSize, priceLC, priceCC, lotAvailable, qty, state, updatedAt)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 0, 1, ?)`,
   [lot.lotRecID, destination, item.itemRecID, item.itemReference, item.itemDescription, item.itemUnit,
-    lot.lotExpiry, lot.lotBatch, lot.lotColor, lot.lotGrid, lot.lotSize, item.priceLC, item.priceCC, now]];
+    lot.lotExpiry, lot.lotBatch, lot.lotColor, lot.lotGrid, lot.lotSize, lot.lotAvailable, now]];
+
+// The available qty just read for the lot, on all its lines
+const lotAvailableUpdate = (lot) => ['UPDATE TR_Lines SET lotAvailable = ? WHERE lotRecID = ?', [lot.lotAvailable, lot.lotRecID]];
 
 // One location : adds the qty to the line of the lot (created when there is none), returns its total
 const AddLotQty = async (item, lot, destination, qty) => {
@@ -371,9 +280,23 @@ const AddLotQty = async (item, lot, destination, qty) => {
   await executeInTransaction([
     lineInsert(item, lot, destination, now),
     ['UPDATE TR_Lines SET qty = qty + ?, state = 1, updatedAt = ? WHERE lotRecID = ? AND destination = ?', [qty, now, lot.lotRecID, destination]],
+    lotAvailableUpdate(lot),
   ]);
   const rows = await query('SELECT qty FROM TR_Lines WHERE lotRecID = ? AND destination = ?', [lot.lotRecID, destination]);
   return rows[0].qty;
+};
+
+// One location : adds the qty to the line of each lot (the items checked in the stock search)
+// rows : [{ item, lot }]
+const AddLotsQty = (rows, destination, qty) => {
+  const now = new Date().toISOString();
+  const statements = [];
+  rows.forEach(({ item, lot }) => {
+    statements.push(lineInsert(item, lot, destination, now));
+    statements.push(['UPDATE TR_Lines SET qty = qty + ?, state = 1, updatedAt = ? WHERE lotRecID = ? AND destination = ?', [qty, now, lot.lotRecID, destination]]);
+    statements.push(lotAvailableUpdate(lot));
+  });
+  return executeInTransaction(statements);
 };
 
 // Multiple locations : the qty of the lot for each destination (0 removes the line)
@@ -391,6 +314,7 @@ const SetLotQtys = (item, lot, qtys) => {
       statements.push(['DELETE FROM TR_Lines WHERE lotRecID = ? AND destination = ?', [lot.lotRecID, destination]]);
     }
   });
+  statements.push(lotAvailableUpdate(lot));
   return executeInTransaction(statements);
 };
 
@@ -399,35 +323,40 @@ const SetLineQty = (lineID, qty) => execute(
 
 const DeleteLine = (lineID) => execute('DELETE FROM TR_Lines WHERE lineID = ?', [lineID]);
 
-// Clears the items : the way of work can be changed again
-const ClearLines = () => execute('DELETE FROM TR_Lines');
+// Multiple locations : the item (its lot) is removed from every location
+const DeleteLot = (lotRecID) => execute('DELETE FROM TR_Lines WHERE lotRecID = ?', [lotRecID]);
+
+// Clears the items : the way of work can be changed again (a new transfer, a new save id)
+const ClearLines = () => executeInTransaction([
+  ['DELETE FROM TR_Lines', []],
+  ["UPDATE TR_Header SET saveID = '' WHERE headerID = 1", []],
+]);
 
 //#endregion
 
 export default {
   GetInfo,
-  StartDownload,
-  SaveItemsPage,
-  SaveLotsPage,
-  SaveBarcodesPage,
-  CompleteDownload,
-  GetItem,
-  FindItemsByBarcode,
-  FindItemsByReference,
-  SearchItems,
-  GetItemLots,
-  GetLot,
+  SaveServerInfo,
   GetDestinations,
   GetHeader,
   SetMultipleLocations,
   SetDestination,
-  SaveHeaderTexts,
+  GetSaveID,
+  CompleteSave,
   GetSummary,
+  GetAllLines,
   GetLines,
+  GetLotTransferQty,
+  GetTransferQtys,
   GetLotQtys,
+  GetLotRecIDs,
+  SetLotsAvailable,
+  SetLotAvailable,
   AddLotQty,
+  AddLotsQty,
   SetLotQtys,
   SetLineQty,
   DeleteLine,
+  DeleteLot,
   ClearLines,
 }

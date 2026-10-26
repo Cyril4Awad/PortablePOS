@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import SwitchSelector from 'react-native-switch-selector';
 import Colors from '../variables/Colors';
@@ -10,6 +10,7 @@ import FreeReceivingItem from '../components/lists/freeReceiving/FreeReceivingIt
 import FreeReceivingLineEditor from '../components/lists/freeReceiving/FreeReceivingLineEditor';
 import FreeReceivingDatabase from '../database/FreeReceivingDatabase';
 import { FormatQuantity, LIST_LIMIT } from '../variables/FreeReceivingRules';
+import MessageBox from '../components/MessageBox';
 
 const COLLECTED = 0;
 const STOCK_FILE = 1;
@@ -55,7 +56,7 @@ const FreeReceivingItemsScreen = () => {
       ? `${summary.pending} of the ${summary.lines} collected lines are not uploaded. Do you want to delete all the collected items ?`
       : `Do you want to delete the ${summary.lines} collected lines ?`;
 
-    Alert.alert('Delete Collected Items', message, [
+    MessageBox.alert('Delete Collected Items', message, [
       { text: 'No', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive', onPress: () => {
@@ -69,7 +70,7 @@ const FreeReceivingItemsScreen = () => {
   };
 
   const DeleteLine = (line) => {
-    Alert.alert('Delete Line', `Do you want to delete ${line.itemReference} (${FormatQuantity(line.qty)}) ?`, [
+    MessageBox.alert('Delete Line', `Do you want to delete ${line.itemReference} (${FormatQuantity(line.qty)}) ?`, [
       { text: 'No', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive', onPress: () => {

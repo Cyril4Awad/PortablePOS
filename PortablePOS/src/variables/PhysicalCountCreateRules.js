@@ -29,11 +29,14 @@ export const EmptyFilters = () => ({
 
 export const HasGroups = (filters) => GROUPS.some(group => filters[group.key].length > 0);
 
+// Check All / Uncheck All replace what the brands, categories... checked : they are removed from the filters
+// (otherwise they check their items again when the items are shown again)
+export const WithoutGroups = (filters) => ({ ...filters, brands: [], categories: [], productGroups: [], identifications: [] });
+
 // '-' or "2 Checked : Nike, Adidas"
 export const GroupSummary = (list, codes) => {
     if (codes.length === 0) return '-';
-    const names = codes.map(code => list.find(row => row.code === code)?.description || code);
-    return `${codes.length} Checked : ${names.join(', ')}`;
+    return `${codes.length} Checked`;
 };
 
 export const NotCountedSummary = (notCounted) => {
@@ -74,6 +77,13 @@ export const CheckDateRange = (from, to) => {
 // all : every item is checked, groups : the checked brands / categories... check their items,
 // include / exclude : items checked / unchecked by hand (itemRecID)
 export const CreateSelection = () => ({ all: false, groups: true, include: [], exclude: [] });
+
+// The selection of the items page is kept while the filters page is open : Show Items opens with it again
+// as long as the filters do not change (cleared when the filters page opens)
+let remembered = null;
+export const RememberSelection = (filters, selection) => { remembered = { filters: JSON.stringify(filters), selection }; };
+export const RememberedSelection = (filters) => remembered && remembered.filters === JSON.stringify(filters) ? remembered.selection : undefined;
+export const ForgetSelection = () => { remembered = null; };
 
 export const CheckAll = () => ({ all: true, groups: true, include: [], exclude: [] });
 

@@ -6,8 +6,7 @@ import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
 import { FontSize } from '../../variables/ResponsiveFont';
 import GeoLocationInfo from '../../variables/GeoLocationInfo';
 import { UseLocation } from '../../variables/AppConfig';
-import ServerInfo from '../../configuration/ServerInfo';
-import { callService } from '../../data/ServiceCall';
+import { CheckServer } from '../../variables/ConnectionStatus';
 
 // Online = the server of the login screen answers (not only the Wi-Fi being connected)
 const statusCheckMs = 10000;
@@ -21,10 +20,7 @@ const MenuFooter = props => {
         let isMounted = true;
 
         const checkServer = () => {
-            ServerInfo.serverIP()
-                .then(serverIP => callService(serverIP, 'Ping', {}, 4000))
-                .then(() => { if (isMounted) setIsOnline(true); })
-                .catch(() => { if (isMounted) setIsOnline(false); });
+            CheckServer().then(online => { if (isMounted) setIsOnline(online); });
         };
 
         checkServer();

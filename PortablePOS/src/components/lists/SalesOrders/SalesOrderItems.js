@@ -1,6 +1,6 @@
 import React from 'react';
 import { useState, useEffect } from 'react';
-import { View, StyleSheet, Text, FlatList, TextInput, Image, TouchableOpacity, Modal, Button, Keyboard, Alert } from 'react-native';
+import { View, StyleSheet, Text, FlatList, TextInput, Image, TouchableOpacity, Modal, Button, Keyboard } from 'react-native';
 import Colors from '../../../variables/Colors';
 import Sizing from '../../../variables/Sizing';
 import { FontSize } from '../../../variables/ResponsiveFont';
@@ -10,6 +10,7 @@ import LoadingData from '../../LoadingData';
 import ServerError from '../../ServerError';
 import SalesOrdersData from '../../../data/SalesOrdersData';
 import SalesOrderScanner from './SalesOrderScanner';
+import MessageBox from '../../MessageBox';
 
 const SalesOrderItems = props => {
 
@@ -221,7 +222,7 @@ const SalesOrderItems = props => {
 
         <TouchableOpacity style={styles.scanItemsButton} onPress={() => {
 
-          Alert.alert('Ready for Invoicing', 'Do you want to send the sales order to POS ?', [
+          MessageBox.alert('Ready for Invoicing', 'Do you want to send the sales order to POS ?', [
             {
               text: 'No',
               onPress: () => { },

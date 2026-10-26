@@ -1,25 +1,30 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Keyboard, Vibration, Image, FlatList, ScrollView, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Keyboard, Vibration, Image, FlatList, ScrollView, Modal, ActivityIndicator } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Colors from '../variables/Colors';
 import { FontSize } from '../variables/ResponsiveFont';
-import ChoiceField, { choiceRowStyle } from '../components/controls/ChoiceField';
+import ChoiceField from '../components/controls/ChoiceField';
+import MainButton from '../components/controls/MainButton';
 import PhysicalCountFilterPicker from '../components/lists/physicalCount/PhysicalCountFilterPicker';
-import TransferItemPicker from '../components/lists/transfer/TransferItemPicker';
 import TransferLotPicker from '../components/lists/transfer/TransferLotPicker';
-import TransferDetailsModal from '../components/lists/transfer/TransferDetailsModal';
-import { useTransferDownload } from '../components/lists/transfer/TransferDownload';
+import TransferStockSearch, { PreloadTransferStock } from '../components/lists/transfer/TransferStockSearch';
+import ROChoiceModal from '../components/lists/receivingOrder/ROChoiceModal';
 import TransferDatabase from '../database/TransferDatabase';
+import TransferData from '../data/TransferData';
 import TransferSettings from '../configuration/TransferSettings';
+import { MachineNameMessage } from '../configuration/MachineName';
 import { PlayScanOk, PlayScanError, PlayQtyConfirmed } from '../variables/PhysicalCountSounds';
+import MessageBox from '../components/MessageBox';
 import {
-  SEARCH_FIELDS, SEARCH_FIELD_LABELS, ONE, LIST_LIMIT, LookupScan, LotText, FormatQuantity,
+  ONE, LIST_LIMIT, LotText, FormatQuantity, ItemOfRows,
   CheckTransferQty, CheckLineQty, ParseTransferQty,
 } from '../variables/TransferRules';
 
-// Transfer on one screen : the header folds away (from location = the one of the server, server and machine open the settings,
-// the stock downloaded, the way of work and the destination, deliver by / remarks), under it the scan and the items
-// Scan a barcode or search a reference, the lot of the item is transferred
+// Transfer on one screen : the header folds away (from location = the one of the server of the login, machine = name of the device,
+// the way of work and the destination), under it the scan and the items
+// The stock is online : a barcode / reference scanned or the Search (by product group or item) read the lots and their available qty
+// from the server, the lot of the item is transferred. The transfer being prepared stays on the device until it is saved
+// Save Transfer sends it to the server (_TRANSFER_tbl_upload_details, one transfer per destination), the checks of frmTransferStock
 // - One location : every scan adds 1 to its line (the qty can be changed in the list), all the lines go to the destination
 // - Multiple locations : one item at a time, its qty is typed for each destination
 // The way of work is locked once the transfer has an item, until its items are cleared
@@ -34,13 +39,14 @@ const TransferScanScreen = () => {
   const firstLoad = useRef(true);
 
   const [info, setInfo] = useState(null);
-  const [header, setHeader] = useState({ multipleLocations: 0, destination: '', deliverBy: '', remarks: '' });
+  const [header, setHeader] = useState({ multipleLocations: 0, destination: '', deliverBy: '', remarks: '', saveID: '' });
   const [destinations, setDestinations] = useState([]);
   const [summary, setSummary] = useState({ lines: 0, lots: 0, qty: 0, destinations: 0 });
   const [lines, setLines] = useState([]);
 
-  const [searchField, setSearchField] = useState(SEARCH_FIELDS.BARCODE);
   const [scanText, setScanText] = useState('');
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [typing, setTyping] = useState(false);
 
   const [status, setStatus] = useState({ text: 'Ready to scan', isError: false });
@@ -50,8 +56,10 @@ const TransferScanScreen = () => {
   const [destinationQtys, setDestinationQtys] = useState({});
 
   const [destinationPickerVisible, setDestinationPickerVisible] = useState(false);
-  const [detailsVisible, setDetailsVisible] = useState(false);
-  const [itemPickText, setItemPickText] = useState(null);
+  // the items of a code used by several items : [{ item, lots }]
+  const [itemPick, setItemPick] = useState(null);
+  // the server answered the last time it was called
+  const [connected, setConnected] = useState(null);
   // { item, lots }
   const [lotPick, setLotPick] = useState(null);
 
@@ -120,7 +128,7 @@ const TransferScanScreen = () => {
   useEffect(() => navigation.addListener('beforeRemove', event => {
     if (!currentRef.current) return;
     event.preventDefault();
-    Alert.alert('Quantities Not Saved', `The quantities of ${currentRef.current.item.itemReference} are not saved.`, [
+    MessageBox.alert('Quantities Not Saved', `The quantities of ${currentRef.current.item.itemReference} are not saved.`, [
       { text: 'Stay', style: 'cancel' },
       { text: 'Leave', style: 'destructive', onPress: () => { currentRef.current = null; navigation.dispatch(event.data.action); } },
     ]);
@@ -153,10 +161,40 @@ const TransferScanScreen = () => {
     }, 80);
   }, [lines]);
 
-  // The downloaded stock is the one of the location of the server
-  const IsStockReady = (loadedInfo, location) => loadedInfo !== null && location !== null && loadedInfo.location === location.locationCode && loadedInfo.complete === 1;
+  // The server of the settings is the one of the location we transfer from
+  const IsServerReady = (loadedSettings, loadedInfo) => loadedSettings.server !== '' && loadedSettings.location !== null
+    && loadedInfo !== null && loadedInfo.location === loadedSettings.location.locationCode;
 
-  // On every visit (back from the settings) and after a download
+  // The location, the destinations and the available qty of the lots of the transfer, read from the server
+  // (the ones read last are kept when it cannot be reached)
+  const RefreshFromServer = async (loadedSettings) => {
+    if (loadedSettings.server === '' || loadedSettings.location === null) return null;
+    try {
+      const locations = await TransferData.GetTransferLocations(loadedSettings.server, 20000);
+      const current = locations.find(row => Number(row.isCurrent) === 1);
+      if (!current || current.locationCode !== loadedSettings.location.locationCode) {
+        throw new Error(current
+          ? `The location of the server is ${current.locationCode}, open the transfer settings and save them`
+          : 'The location of the server is not a transfer location');
+      }
+      const serverInfo = await TransferData.GetTransferInfo(loadedSettings.server, current.locationCode);
+      await TransferDatabase.SaveServerInfo(loadedSettings.server, serverInfo, locations);
+      const lotRecIDs = await TransferDatabase.GetLotRecIDs();
+      if (lotRecIDs.length > 0) {
+        await TransferDatabase.SetLotsAvailable(await TransferData.GetTransferLotsAvailable(loadedSettings.server, current.locationCode, lotRecIDs));
+      }
+      setConnected(true);
+      // the stock search opens at once
+      PreloadTransferStock(loadedSettings.server, current.locationCode);
+      return '';
+    }
+    catch (error) {
+      setConnected(false);
+      return error.message;
+    }
+  };
+
+  // On every visit (back from the settings)
   const LoadAll = async () => {
     const loadedSettings = {
       server: await TransferSettings.server(),
@@ -164,29 +202,31 @@ const TransferScanScreen = () => {
       machineName: await TransferSettings.machineName(),
     };
     setSettings(loadedSettings);
+    const serverError = await RefreshFromServer(loadedSettings);
     const loadedInfo = await TransferDatabase.GetInfo();
     setInfo(loadedInfo);
     setDestinations(loadedInfo ? await TransferDatabase.GetDestinations(loadedInfo.location) : []);
     await Reload();
 
-    const ready = IsStockReady(loadedInfo, loadedSettings.location);
-    if (!firstLoad.current) return;
-    firstLoad.current = false;
-
-    const savedField = await TransferSettings.searchField();
-    if (SEARCH_FIELD_LABELS[savedField]) setSearchField(savedField);
-
-    // The header is open until the stock is downloaded
-    if (!ready) {
+    if (serverError === null) {
       setHeaderOpen(true);
-      showStatus('Download the stock first', true);
+      showStatus('Open the transfer settings', true);
       return;
     }
+    if (serverError !== '') {
+      showStatus(`Server not reached : ${serverError}`, true);
+      if (!IsServerReady(loadedSettings, loadedInfo)) setHeaderOpen(true);
+      return;
+    }
+
+    if (!firstLoad.current) return;
+    firstLoad.current = false;
     const loadedHeader = await TransferDatabase.GetHeader();
     if (loadedHeader.multipleLocations === 0 && loadedHeader.destination === '') {
       showStatus('Choose the location to transfer to');
       setDestinationPickerVisible(true);
     }
+    else showStatus('Ready to scan');
   };
 
   useFocusEffect(
@@ -195,9 +235,7 @@ const TransferScanScreen = () => {
     }, [])
   );
 
-  const { Download, ProgressModal } = useTransferDownload(() => LoadAll().catch(error => showStatus(error.message, true)));
-
-  const stockReady = IsStockReady(info, settings.location);
+  const serverReady = IsServerReady(settings, info);
 
   //#endregion
 
@@ -243,61 +281,87 @@ const TransferScanScreen = () => {
     ScanText(text);
   };
 
-  // A scan of the scan field, or a barcode scanned into a qty box
+  // Items can be added : the server is set, one location has its destination (PreventAddingDetails of frmTransferStock)
+  const CanAddItems = () => {
+    if (!serverReady) {
+      ShowError(settings.server === '' || settings.location === null ? 'Open the transfer settings' : 'The server cannot be reached, open the header to try again');
+      setHeaderOpen(true);
+      return false;
+    }
+    setHeaderOpen(false);
+    if (!multiple && header.destination === '') {
+      ShowError('Choose the location to transfer to');
+      setDestinationPickerVisible(true);
+      return false;
+    }
+    return true;
+  };
+
+  // The lot rows of the server grouped by item : [{ item, lots }]
+  const GroupByItem = (rows) => {
+    const items = [];
+    const index = {};
+    rows.forEach(row => {
+      if (index[row.itemRecID] === undefined) { index[row.itemRecID] = items.length; items.push([]); }
+      items[index[row.itemRecID]].push(row);
+    });
+    return items.map(ItemOfRows);
+  };
+
+  // A scan of the scan field, or a barcode scanned into a qty box : a barcode, a single reference or the reference of the item
   const ScanText = (text) => {
 
     enqueue(async () => {
       if (text.trim() === '') return;
-      if (!stockReady) {
-        ShowError(info !== null && settings.location !== null && info.location !== settings.location.locationCode
-          ? `The stock downloaded is the one of location ${info.location}, download location ${settings.location.locationCode}`
-          : 'Download the stock first');
-        setHeaderOpen(true);
+      if (!CanAddItems()) return;
+      showStatus('Searching...');
+      const rows = await TransferData.FindTransferItem(settings.server, settings.location.locationCode, text.trim());
+      setConnected(true);
+      if (rows.length === 0) {
+        // one location : a short number that is not an item is the qty of the last item (typed while the scan box had the focus)
+        if (!multiple && lines.length > 0 && /^[0-9]{1,9}([.,][0-9]*)?$/.test(text.trim())) {
+          SaveLineQty(lines[0], text.trim(), true);
+          return;
+        }
+        ShowError('Item Not Found Or Not Active');
         return;
       }
-      setHeaderOpen(false);
-      if (!multiple && header.destination === '') {
-        ShowError('Choose the location to transfer to');
-        setDestinationPickerVisible(true);
+      const items = GroupByItem(rows);
+      if (items.length > 1) {
+        showStatus(`${items.length} items for ${text.trim()}, choose one`);
+        setItemPick(items);
         return;
       }
-      const result = await LookupScan(TransferDatabase, searchField, text);
-      switch (result.kind) {
-        case 'found':
-          await ProcessItem(result.itemRecID);
-          break;
-        case 'pick':
-          setItemPickText(result.value);
-          break;
-        case 'notFound':
-          ShowError(`${SEARCH_FIELD_LABELS[searchField]} Not Found : ${result.value}`);
-          break;
-      }
+      await ProcessItem(items[0]);
     });
 
   };
 
   // The lots of the item : none = no available qty (blocked), one is taken, several open the list
-  const ProcessItem = async (itemRecID) => {
-    const item = await TransferDatabase.GetItem(itemRecID);
-    const lots = await TransferDatabase.GetItemLots(itemRecID);
-
-    if (lots.length === 0) {
-      ShowError(`${item.itemReference} : the available qty in ${info.location} is 0`);
+  // The qty of each lot already in the transfer is the one of the lines on the device
+  const ProcessItem = async ({ item, lots }) => {
+    if (item.itemFourthParty === 'Y') {
+      ShowError('You Can’t Transact a Forth Party Item');
       return;
     }
-    if (!lots.some(lot => lot.lotAvailable - lot.transferQty > 0)) {
+    if (lots.length === 0) {
+      ShowError(`${item.itemReference} : the available qty in ${settings.location.locationCode} is 0`);
+      return;
+    }
+    const lotsWithTransfer = [];
+    for (const lot of lots) lotsWithTransfer.push({ ...lot, transferQty: await TransferDatabase.GetLotTransferQty(lot.lotRecID) });
+    if (!lotsWithTransfer.some(lot => lot.lotAvailable - lot.transferQty > 0)) {
       ShowError(`${item.itemReference} : all the available qty is already in the transfer`);
       return;
     }
 
     PlayScanOk();
-    if (lots.length === 1) {
-      await UseLot(item, lots[0]);
+    if (lotsWithTransfer.length === 1) {
+      await UseLot(item, lotsWithTransfer[0]);
     }
     else {
       showStatus(`${item.itemReference} : choose the lot`);
-      setLotPick({ item, lots });
+      setLotPick({ item, lots: lotsWithTransfer });
     }
   };
 
@@ -311,7 +375,7 @@ const TransferScanScreen = () => {
       const loadedLines = await TransferDatabase.GetLines('', LIST_LIMIT);
       focusLineRequest.current = loadedLines.find(row => row.lotRecID === lot.lotRecID)?.lineID ?? null;
       await Reload();
-      Confirmed(`${item.itemReference} = ${FormatQuantity(total)} : type the qty, then Enter`);
+      Confirmed(`${item.itemReference} = ${FormatQuantity(total)} : type the qty, then Enter (Avlb ${FormatQuantity(lot.lotAvailable)})`);
       return;
     }
 
@@ -326,25 +390,65 @@ const TransferScanScreen = () => {
     const existingQty = Object.values(qtys).reduce((sum, qty) => sum + qty, 0);
     setDestinationTexts(texts);
     lastDestination.current = null;
-    // allowed : the available qty of the lot less the qty of its lines that are not in this card (none, all its lines are here)
-    setCurrent({ item, lot, existingQtys: qtys, existingQty, allowed: lot.lotAvailable - (lot.transferQty - existingQty) });
+    // allowed : the available qty of the lot (all its lines are in this card)
+    setCurrent({ item, lot, existingQtys: qtys, existingQty, allowed: lot.lotAvailable });
     showStatus(`${item.itemReference} : type the qty of each location`);
   };
 
-  // An item of the list (multiple locations) : its lot is opened with all the destinations
-  // A lot that is not in the last download any more keeps its qty (it can only go down)
+  // An item of the list (multiple locations) : its lot is opened with all the destinations, with its available qty read again
+  // (the one read last when the server cannot be reached)
   const EditTransferLot = (group) => {
     enqueue(async () => {
       const line = group.lines[0];
-      const item = await TransferDatabase.GetItem(line.itemRecID) ?? {
-        itemRecID: line.itemRecID, itemReference: line.itemReference, itemDescription: line.itemDescription,
-        itemUnit: line.itemUnit, priceLC: line.priceLC, priceCC: line.priceCC,
-      };
-      const lot = await TransferDatabase.GetLot(line.lotRecID) ?? {
-        lotRecID: line.lotRecID, itemRecID: line.itemRecID, lotExpiry: line.lotExpiry, lotBatch: line.lotBatch,
-        lotColor: line.lotColor, lotGrid: line.lotGrid, lotSize: line.lotSize, lotAvailable: group.qty, transferQty: group.qty,
+      let lotAvailable = line.lotAvailable;
+      try {
+        const available = await TransferData.GetTransferLotsAvailable(settings.server, settings.location.locationCode, [line.lotRecID]);
+        lotAvailable = available[line.lotRecID] ?? 0;
+        await TransferDatabase.SetLotAvailable(line.lotRecID, lotAvailable);
+      }
+      catch (error) { }
+      const item = { itemRecID: line.itemRecID, itemReference: line.itemReference, itemDescription: line.itemDescription, itemUnit: line.itemUnit };
+      const lot = {
+        lotRecID: line.lotRecID, lotExpiry: line.lotExpiry, lotBatch: line.lotBatch, lotColor: line.lotColor, lotGrid: line.lotGrid,
+        lotSize: line.lotSize, lotAvailable,
       };
       await OpenLotEditor(item, lot);
+    });
+  };
+
+  // The stock search : one location, the lots checked get 1 each (the stock search with check of frmTransferStock),
+  // multiple locations, the lot picked is opened with all the destinations
+  const OpenSearch = () => {
+    if (CanAddItems()) setSearchVisible(true);
+  };
+
+  const AddCheckedLots = (rows) => {
+    setSearchVisible(false);
+    enqueue(async () => {
+      const added = [];
+      const refused = [];
+      for (const row of rows) {
+        const check = CheckTransferQty(ONE, row.lotAvailable, await TransferDatabase.GetLotTransferQty(row.lotRecID));
+        if (check.ok) added.push({ item: row, lot: row });
+        else refused.push(`${row.itemReference} : ${check.message}`);
+      }
+      if (added.length > 0) await TransferDatabase.AddLotsQty(added, header.destination, ONE);
+      await Reload();
+      if (refused.length > 0) {
+        ShowError(`${Plural(added.length, 'item')} added, ${refused.length} not added`, false);
+        MessageBox.alert('Items Not Added', refused.join('\n'), [{ text: 'OK', onPress: focusScan }]);
+        return;
+      }
+      Confirmed(`${Plural(added.length, 'item')} added`);
+      focusScan();
+    });
+  };
+
+  const PickSearchedLot = (row) => {
+    setSearchVisible(false);
+    enqueue(async () => {
+      PlayScanOk();
+      await OpenLotEditor(row, row);
     });
   };
 
@@ -391,8 +495,21 @@ const TransferScanScreen = () => {
     });
   };
 
+  // + / - : one more or one less on the line (not less than 1, ✕ removes it, not more than the available qty of the lot)
+  const StepLine = (line, step) => {
+    enqueue(async () => {
+      const qty = line.qty + step;
+      if (qty < ONE) return;
+      const check = await CheckLineQty(TransferDatabase, line, qty);
+      if (!check.ok) { ShowError(`${line.itemReference} : ${check.message}`, false); return; }
+      await TransferDatabase.SetLineQty(line.lineID, qty);
+      await Reload();
+      Confirmed(`${line.itemReference} = ${FormatQuantity(qty)}`);
+    });
+  };
+
   const DeleteLine = (line) => {
-    Alert.alert('Remove Item', `Do you want to remove ${line.itemReference} (${FormatQuantity(line.qty)}) from the transfer ?`, [
+    MessageBox.alert('Remove Item', `Do you want to remove ${line.itemReference} (${FormatQuantity(line.qty)}) from the transfer ?`, [
       { text: 'No', style: 'cancel' },
       {
         text: 'Remove', style: 'destructive', onPress: () => enqueue(async () => {
@@ -451,6 +568,24 @@ const TransferScanScreen = () => {
     else Keyboard.dismiss();
   };
 
+  // + / - : one more or one less for the location (not less than 0, not more than the available qty in total)
+  const StepDestination = (code, step) => {
+    if (!current) return;
+    const texts = destinationQtysRef.current;
+    const parsed = ParseTransferQty(texts[code] ?? '', decimals, true);
+    const value = Math.max(0, (parsed.ok ? parsed.value : 0) + step);
+    const others = Object.keys(texts).filter(key => key !== code).reduce((sum, key) => {
+      const other = ParseTransferQty(texts[key], decimals, true);
+      return sum + (other.ok ? other.value : 0);
+    }, 0);
+    if (step > 0 && others + value > current.allowed) {
+      ShowError(`${code} : only ${FormatQuantity(current.allowed)} available in total`, false);
+      return;
+    }
+    lastDestination.current = code;
+    setDestinationTexts({ ...texts, [code]: value === 0 ? '' : FormatQuantity(value) });
+  };
+
   const SaveDestinationQtys = () => {
 
     if (!current) return;
@@ -468,9 +603,8 @@ const TransferScanScreen = () => {
         total += parsed.value;
       }
 
-      const lot = await TransferDatabase.GetLot(current.lot.lotRecID);
       if (total > 0) {
-        const check = CheckTransferQty(total, lot.lotAvailable, lot.transferQty - current.existingQty);
+        const check = CheckTransferQty(total, current.lot.lotAvailable, 0);
         if (!check.ok) {
           // the last destination typed goes back to 0
           if (lastDestination.current) {
@@ -493,23 +627,92 @@ const TransferScanScreen = () => {
 
   };
 
+  // Multiple locations : the item is removed from all the locations
+  const DeleteTransferLot = (group) => {
+    const line = group.lines[0];
+    MessageBox.alert('Remove Item', `Do you want to remove ${line.itemReference} (${FormatQuantity(group.qty)}) from all the locations ?`, [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Remove', style: 'destructive', onPress: () => enqueue(async () => {
+          await TransferDatabase.DeleteLot(group.lotRecID);
+          await Reload();
+          showStatus(`${line.itemReference} removed`);
+        })
+      },
+    ]);
+  };
+
   //#endregion
 
   //#region Save transfer
 
+  // btnConfirm of frmTransferStock : the destination, the items, their available qty, then the transfer is sent to the server
+  // (the server checks them again with its own stock), one transfer per destination
   const SaveTransfer = () => {
-    if (summary.lines === 0) {
-      ShowError('No items in the transfer');
-      return;
-    }
-    if (!multiple && header.destination === '') {
-      ShowError('Choose the location to transfer to');
-      setDestinationPickerVisible(true);
-      return;
-    }
-    Alert.alert('Save Transfer', `${Plural(summary.lots, 'item')}, qty ${FormatQuantity(summary.qty)}. The saving of the transfer to the server is not available yet.`, [
-      { text: 'OK', onPress: focusScan },
-    ]);
+    enqueue(async () => {
+      if (summary.lines === 0) {
+        ShowError('No Items To Send');
+        return;
+      }
+      if (!multiple && header.destination === '') {
+        ShowError('Missing Data');
+        setDestinationPickerVisible(true);
+        return;
+      }
+      if (settings.server === '') { ShowError('The server of the login screen is not defined'); return; }
+      if (settings.machineName === '') { ShowError(MachineNameMessage()); return; }
+      if (!serverReady) { ShowError('Open the transfer settings'); setHeaderOpen(true); return; }
+
+      // The lots with more qty than their available qty (all their destinations), the available qty read now
+      const lotRecIDs = await TransferDatabase.GetLotRecIDs();
+      await TransferDatabase.SetLotsAvailable(await TransferData.GetTransferLotsAvailable(settings.server, settings.location.locationCode, lotRecIDs));
+      await Reload();
+      const allLines = await TransferDatabase.GetAllLines();
+      let itemsWithNoAvlQty = '';
+      const lotTotals = {};
+      allLines.forEach(line => { lotTotals[line.lotRecID] = (lotTotals[line.lotRecID] ?? 0) + line.qty; });
+      const seenLots = new Set();
+      for (const line of allLines) {
+        if (seenLots.has(line.lotRecID)) continue;
+        seenLots.add(line.lotRecID);
+        if (lotTotals[line.lotRecID] > line.lotAvailable) itemsWithNoAvlQty += `- ${line.itemDescription} : \n`;
+      }
+      if (itemsWithNoAvlQty !== '') {
+        ShowError('Exist Items With No Available Quantity');
+        MessageBox.alert('Transfer Stock To Location/s', 'Exist Items With No Available Quantity :\n' + itemsWithNoAvlQty, [{ text: 'OK', onPress: focusScan }]);
+        return;
+      }
+
+      MessageBox.alert('Transfer Stock To Location/s', `Confirm And Send Transfer${multiple ? 's' : ''} ?`, [
+        { text: 'No', style: 'cancel', onPress: focusScan },
+        { text: 'Yes', onPress: () => SendTransfer(allLines) },
+      ]);
+    });
+  };
+
+  const SendTransfer = (allLines) => {
+    enqueue(async () => {
+      setSaving(true);
+      showStatus('Sending the transfer...');
+      try {
+        const saveID = await TransferDatabase.GetSaveID();
+        const result = await TransferData.SaveTransfer(settings.server, settings.location.locationCode, settings.machineName, saveID,
+          allLines.map(line => ({ itemRecID: line.itemRecID, lotRecID: line.lotRecID, destination: line.destination, qty: (line.qty / 1000).toString() })));
+        await TransferDatabase.CompleteSave();
+        await Reload();
+        Confirmed('Transfer sent');
+        MessageBox.alert('Transfer Stock To Location/s',
+          'Transfer Sent To Sync Server Successfully \n# ' + result.transfers.map(transfer => `${transfer.transferID} (${transfer.destination})`).join(' '),
+          [{ text: 'OK', onPress: focusScan }]);
+      }
+      catch (error) {
+        ShowError('The transfer is not saved', false);
+        MessageBox.alert('Transfer Stock To Location/s', error.message, [{ text: 'OK', onPress: focusScan }]);
+      }
+      finally {
+        setSaving(false);
+      }
+    });
   };
 
   // The way of work can be changed again afterwards
@@ -518,7 +721,7 @@ const TransferScanScreen = () => {
       ShowError('No items in the transfer');
       return;
     }
-    Alert.alert('Clear Transfer', `Do you want to remove the ${summary.lines} lines of the transfer ?`, [
+    MessageBox.alert('Clear Transfer', `Do you want to remove the ${summary.lines} lines of the transfer ?`, [
       { text: 'No', style: 'cancel', onPress: focusScan },
       {
         text: 'Clear', style: 'destructive', onPress: () => enqueue(async () => {
@@ -530,15 +733,6 @@ const TransferScanScreen = () => {
           focusScan();
         })
       },
-    ]);
-  };
-
-  // The stock row : download it again, or look at it (and at the lines of every destination)
-  const StockChoice = () => {
-    Alert.alert('Stock', stockReady ? `Stock of ${info.location} downloaded ${info.downloadDate}` : 'The stock is not downloaded', [
-      { text: 'Cancel', style: 'cancel' },
-      ...(info !== null ? [{ text: 'View Items', onPress: () => navigation.navigate('TransferItems') }] : []),
-      { text: 'Download', onPress: () => Download({ ...settings, info, lines: summary.lines }) },
     ]);
   };
 
@@ -563,7 +757,7 @@ const TransferScanScreen = () => {
       return;
     }
 
-    Alert.alert('Change The Way Of Work', `The transfer has ${summary.lines} lines. The way of work can only change once its items are cleared.`, [
+    MessageBox.alert('Change The Way Of Work', `The transfer has ${summary.lines} lines. The way of work can only change once its items are cleared.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Clear Items', style: 'destructive', onPress: () => enqueue(async () => {
@@ -586,13 +780,18 @@ const TransferScanScreen = () => {
         <Text style={styles.lineDescriptionText} numberOfLines={1}>{line.itemDescription}</Text>
         {LotText(line) !== '' ? <Text style={styles.lineLotText} numberOfLines={1}>{LotText(line)}</Text> : <></>}
       </View>
+      <View style={styles.lineQtyContainer}>
+      <View style={styles.lineQtyRow}>
+      <TouchableOpacity style={styles.lineStepButton} onPress={() => StepLine(line, -ONE)}>
+        <Text style={styles.stepButtonText}>−</Text>
+      </TouchableOpacity>
       <TextInput
         key={`${line.lineID}-${line.qty}`}
         ref={input => { lineQtyRefs.current[line.lineID] = input; }}
         onPressIn={QtyFocus}
         onFocus={QtyFocus}
         onBlur={QtyBlur}
-        style={styles.lineQtyText}
+        style={[styles.lineQtyText, styles.lineStepQtyText]}
         defaultValue={FormatQuantity(line.qty)}
         keyboardType='numeric'
         selectTextOnFocus={true}
@@ -615,6 +814,14 @@ const TransferScanScreen = () => {
           SaveLineQty(line, event.nativeEvent.text, false);
         }}
       />
+      <TouchableOpacity style={styles.lineStepButton} onPress={() => StepLine(line, ONE)}>
+        <Text style={styles.stepButtonText}>+</Text>
+      </TouchableOpacity>
+      </View>
+        <Text style={[styles.lineAvailableText, { color: line.qty > line.lotAvailable ? 'red' : 'gray' }]} numberOfLines={1}>
+          Avlb {FormatQuantity(line.lotAvailable)}
+        </Text>
+      </View>
       <TouchableOpacity style={styles.lineDeleteButton} onPress={() => DeleteLine(line)}>
         <Text style={styles.lineDeleteText}>✕</Text>
       </TouchableOpacity>
@@ -627,8 +834,11 @@ const TransferScanScreen = () => {
         <Text style={styles.destinationCodeText} numberOfLines={1}>{destination.locationCode}</Text>
         <Text style={styles.lineDescriptionText} numberOfLines={1}>{destination.locationDescription}</Text>
       </View>
+      <TouchableOpacity style={styles.stepButton} onPress={() => StepDestination(destination.locationCode, -ONE)}>
+        <Text style={styles.stepButtonText}>−</Text>
+      </TouchableOpacity>
       <TextInput
-        style={styles.lineQtyText}
+        style={[styles.lineQtyText, styles.destinationQtyText]}
         ref={input => { destinationRefs.current[destination.locationCode] = input; }}
         onPressIn={QtyFocus}
         onFocus={QtyFocus}
@@ -647,6 +857,9 @@ const TransferScanScreen = () => {
         onSubmitEditing={() => SubmitDestination(destination.locationCode)}
         onEndEditing={() => CheckDestination(destination.locationCode)}
       />
+      <TouchableOpacity style={styles.stepButton} onPress={() => StepDestination(destination.locationCode, ONE)}>
+        <Text style={styles.stepButtonText}>+</Text>
+      </TouchableOpacity>
     </View>
   );
 
@@ -682,6 +895,9 @@ const TransferScanScreen = () => {
           <Text style={styles.lotTotalText}>{FormatQuantity(group.qty)}</Text>
           <Text style={styles.lotTotalLabelText}>{Plural(group.lines.length, 'Location')}</Text>
         </View>
+        <TouchableOpacity style={styles.lineDeleteButton} onPress={() => DeleteTransferLot(group)}>
+          <Text style={styles.lineDeleteText}>✕</Text>
+        </TouchableOpacity>
       </TouchableOpacity>
     );
   };
@@ -693,19 +909,14 @@ const TransferScanScreen = () => {
   const destination = destinationOf(header.destination);
 
   const location = settings.location;
-  let stockText = 'Not Downloaded';
-  if (info !== null && location !== null && info.location !== location.locationCode) stockText = `Location ${info.location}, download ${location.locationCode}`;
-  else if (info !== null && info.complete === 0) stockText = 'Download Not Completed';
-  else if (info !== null) stockText = `${info.itemsStored} Items  ·  ${info.lotsStored} Lots  ·  ${info.downloadDate}`;
+  const connectionText = connected === null ? 'Connecting...' : connected ? 'Connected' : 'Not Connected - Tap To Try Again';
 
   // Folded : from → to, or what is missing
-  const headerSummary = !stockReady ? 'Stock not downloaded'
+  const headerSummary = !serverReady ? 'Open the transfer settings'
     : `${location.locationCode} → ${multiple ? 'Multiple Locations' : header.destination === '' ? 'Choose The Location' : `${header.destination}${destination ? ' - ' + destination.locationDescription : ''}`}`;
 
   return (
     <View style={styles.container}>
-
-      {ProgressModal()}
 
       <PhysicalCountFilterPicker
         visible={destinationPickerVisible}
@@ -721,32 +932,40 @@ const TransferScanScreen = () => {
         onCancel={() => { setDestinationPickerVisible(false); focusScan(); }}
       />
 
-      <TransferDetailsModal
-        visible={detailsVisible}
-        deliverBy={header.deliverBy}
-        remarks={header.remarks}
-        onSave={(deliverBy, remarks) => {
-          setDetailsVisible(false);
-          enqueue(async () => {
-            await TransferDatabase.SaveHeaderTexts(deliverBy, remarks);
-            await Reload();
-            showStatus('Transfer details saved');
-            focusScan();
-          });
-        }}
-        onClose={() => { setDetailsVisible(false); focusScan(); }}
+      {/* A code used by several items : the item is chosen */}
+      <ROChoiceModal
+        visible={itemPick !== null}
+        title='Choose The Item'
+        rows={itemPick ?? []}
+        keyOf={row => row.item.itemRecID}
+        textsOf={row => ({
+          title: row.item.itemReference,
+          detail: row.item.itemDescription,
+          note: `Avlb ${FormatQuantity(row.lots.reduce((sum, lot) => sum + lot.lotAvailable, 0))} ${row.item.itemUnit}`,
+          warning: row.lots.length === 0 ? 'No available qty' : undefined,
+        })}
+        onPick={row => { setItemPick(null); enqueue(() => ProcessItem(row)); }}
+        onClose={() => { setItemPick(null); focusScan(); }}
       />
 
-      <TransferItemPicker
-        visible={itemPickText !== null}
-        searchText={itemPickText ?? ''}
-        currencyLC={info?.currencyLC}
-        onPick={(item) => {
-          setItemPickText(null);
-          enqueue(() => ProcessItem(item.itemRecID));
-        }}
-        onClose={() => { setItemPickText(null); focusScan(); }}
+      <TransferStockSearch
+        visible={searchVisible}
+        server={settings.server}
+        location={settings.location?.locationCode}
+        checks={!multiple}
+        onAdd={AddCheckedLots}
+        onPick={PickSearchedLot}
+        onClose={() => { setSearchVisible(false); focusScan(); }}
       />
+
+      <Modal visible={saving} transparent={true} presentationStyle="overFullScreen">
+        <View style={styles.savingContainer}>
+          <View style={styles.savingCard}>
+            <ActivityIndicator size='large' color={Colors.brandBlue} />
+            <Text style={styles.savingText}>Sending the transfer...</Text>
+          </View>
+        </View>
+      </Modal>
 
       <TransferLotPicker
         item={lotPick?.item ?? null}
@@ -761,7 +980,7 @@ const TransferScanScreen = () => {
 
       {/* The header : tap to fold or unfold it */}
       <TouchableOpacity style={[styles.headerToggle, compact ? styles.hidden : null]} onPress={() => { Keyboard.dismiss(); setHeaderOpen(open => !open); }}>
-        <Text style={[styles.headerToggleText, !stockReady ? { color: 'red' } : null]} numberOfLines={1}>
+        <Text style={[styles.headerToggleText, !serverReady || connected === false ? { color: 'red' } : null]} numberOfLines={1}>
           {headerOpen ? 'Header' : headerSummary}
         </Text>
         <Text style={styles.headerToggleArrow}>{headerOpen ? '▲' : '▼'}</Text>
@@ -779,37 +998,21 @@ const TransferScanScreen = () => {
             style={{ borderRightWidth: 0 }}
           />
 
-          <View style={choiceRowStyle.row}>
-            <View style={styles.fieldHalf}>
-              <ChoiceField
-                title='Server'
-                value={settings.server === '' ? 'Not Defined' : settings.server}
-                onPress={() => navigation.navigate('TransferSettings')}
-                style={{ borderBottomWidth: 0 }}
-              />
-            </View>
-            <View style={styles.fieldHalf}>
-              <ChoiceField
-                title='Machine'
-                value={settings.machineName === '' ? 'Not Defined' : settings.machineName}
-                onPress={() => navigation.navigate('TransferSettings')}
-                style={{ borderRightWidth: 0, borderBottomWidth: 0 }}
-              />
-            </View>
-          </View>
-
+          {/* The server is the one of the login, the machine name is the name of the device : read only */}
           <ChoiceField
-            title='Stock'
-            value={stockText}
-            valueStyle={!stockReady ? { color: 'red' } : null}
-            onPress={StockChoice}
-            style={{ borderRightWidth: 0 }}
+            title='Machine'
+            value={settings.machineName === '' ? 'Not Valid' : settings.machineName}
+            valueStyle={settings.machineName === '' ? { color: 'red' } : null}
+            onPress={settings.machineName === '' ? () => alert(MachineNameMessage()) : undefined}
+            style={{ borderRightWidth: 0, borderBottomWidth: 0 }}
           />
 
+          {/* The stock is read online : tap to read the server again */}
           <ChoiceField
-            title='Deliver By / Remarks'
-            value={[header.deliverBy, header.remarks].filter(text => text !== '').join('  ·  ') || 'None'}
-            onPress={() => setDetailsVisible(true)}
+            title='Server Connection'
+            value={connectionText}
+            valueStyle={connected === false ? { color: 'red' } : { color: Colors.brandGreen }}
+            onPress={() => { setConnected(null); LoadAll().catch(error => showStatus(error.message, true)); }}
             style={{ borderRightWidth: 0 }}
           />
 
@@ -824,7 +1027,10 @@ const TransferScanScreen = () => {
               <Text style={styles.pillButtonText} numberOfLines={1}>{multiple ? 'Multiple Locations' : 'Multiple'}</Text>
             </TouchableOpacity>
             {!multiple ?
-              <TouchableOpacity style={[styles.pillButton, styles.destinationButton]} onPress={() => setDestinationPickerVisible(true)}>
+              <TouchableOpacity style={[styles.pillButton, styles.destinationButton, { opacity: summary.lines > 0 ? 0.5 : 1 }]} onPress={() => {
+                if (summary.lines > 0) { ShowError('Clear the items of the transfer to change the location'); return; }
+                setDestinationPickerVisible(true);
+              }}>
                 <Text style={styles.pillButtonText} numberOfLines={1}>
                   {header.destination === '' ? 'Transfer To' : `To ${header.destination}${destination ? ' - ' + destination.locationDescription : ''}`} ▾
                 </Text>
@@ -837,20 +1043,15 @@ const TransferScanScreen = () => {
 
       {/* Search field (tap to switch barcode / reference) + scan */}
       <View style={[styles.entryContainer, compact ? styles.hidden : null]}>
-        <TouchableOpacity style={[styles.pillButton, styles.fieldButton]} onPress={() => {
-          const next = searchField === SEARCH_FIELDS.BARCODE ? SEARCH_FIELDS.REFERENCE : SEARCH_FIELDS.BARCODE;
-          setSearchField(next);
-          TransferSettings.saveSearchField(next);
-          showStatus(`Scan or type the ${SEARCH_FIELD_LABELS[next].toLowerCase()}`);
-          focusScan();
-        }}>
-          <Text style={styles.pillButtonText} numberOfLines={1}>{SEARCH_FIELD_LABELS[searchField]} ⇄</Text>
+        <TouchableOpacity style={[styles.pillButton, styles.fieldButton]} onPress={OpenSearch}>
+          <Image source={require('../assets/icons/stock.png')} style={styles.searchImage} resizeMode='contain' />
+          <Text style={styles.pillButtonText} numberOfLines={1}>Search</Text>
         </TouchableOpacity>
         <TextInput
           ref={scanRef}
           style={styles.entryText}
           value={scanText}
-          placeholder={`Scan ${SEARCH_FIELD_LABELS[searchField]}`}
+          placeholder='Scan Barcode'
           showSoftInputOnFocus={typing}
           onPressIn={() => { setHeaderOpen(false); if (!typing) Keyboard.dismiss(); }}
           autoCapitalize='characters'
@@ -870,22 +1071,26 @@ const TransferScanScreen = () => {
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.statusContainer, { backgroundColor: status.isError ? 'red' : Colors.brandBlue }]}>
+      {/* tap : the whole message */}
+      <TouchableOpacity style={[styles.statusContainer, { backgroundColor: status.isError ? 'red' : Colors.brandBlue }]}
+        onPress={() => MessageBox.alert('Message', status.text, [{ text: 'OK' }])}>
         <Text style={styles.statusText} numberOfLines={1}>{status.text}</Text>
-      </View>
+      </TouchableOpacity>
 
-      {!multiple ?
+      {!(multiple && current) ?
         // One location : the lines of the transfer, the qty is changed in the list
+        // Multiple locations : the items of the transfer, tap one to change its qty in every location
+        // One list for both (re-created when the way of work changes, nothing clipped) : two lists switched crashed on Android
         <FlatList
+          key={multiple ? 'multiple' : 'one'}
           style={styles.list}
-          data={lines}
-          keyExtractor={(line) => line.lineID.toString()}
-          renderItem={LineRow}
+          data={multiple ? transferLots : lines}
+          keyExtractor={multiple ? (group) => group.lotRecID : (line) => line.lineID.toString()}
+          renderItem={multiple ? TransferLotRow : LineRow}
           keyboardShouldPersistTaps='handled'
           removeClippedSubviews={false}
-          ListEmptyComponent={<Text style={styles.emptyText}>Scan the items to transfer</Text>}
+          ListEmptyComponent={<Text style={styles.emptyText}>{multiple ? 'Scan an item, then type its qty for each location' : 'Scan the items to transfer'}</Text>}
         /> :
-        current ?
           // Multiple locations : the scanned lot and the qty of each destination
           <View style={styles.list}>
             <View style={[styles.currentContainer, compact ? styles.currentContainerCompact : null]}>
@@ -908,16 +1113,7 @@ const TransferScanScreen = () => {
             <ScrollView keyboardShouldPersistTaps='handled'>
               {destinations.map(DestinationRow)}
             </ScrollView>
-          </View> :
-          // Multiple locations : the items of the transfer, tap one to change its qty in every location
-          <FlatList
-            style={styles.list}
-            data={transferLots}
-            keyExtractor={(group) => group.lotRecID}
-            renderItem={TransferLotRow}
-            keyboardShouldPersistTaps='handled'
-            ListEmptyComponent={<Text style={styles.emptyText}>Scan an item, then type its qty for each location</Text>}
-          />}
+          </View>}
 
       {/* Always visible at the bottom */}
       <View style={[styles.bottomContainer, compact ? styles.hidden : null]}>
@@ -926,22 +1122,15 @@ const TransferScanScreen = () => {
         </Text>
         {!(multiple && current) ?
           <View style={styles.actionsContainer}>
-            <TouchableOpacity style={[styles.actionButton, styles.saveTransferButton, { opacity: summary.lines === 0 ? 0.5 : 1 }]} onPress={SaveTransfer}>
-              <Text style={styles.actionButtonText}>Save Transfer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.actionButton, styles.clearTransferButton, { opacity: summary.lines === 0 ? 0.5 : 1 }]} onPress={ClearTransfer}>
-              <Text style={styles.actionButtonText}>Clear</Text>
-            </TouchableOpacity>
+            <MainButton title='Save Transfer' imageSource={require('../assets/icons/upload.png')} onPress={SaveTransfer} />
+            <MainButton title='Clear' imageSource={require('../assets/icons/deleteLine.png')} onPress={ClearTransfer} />
           </View> :
           <></>}
         {multiple && current ?
           <View style={styles.actionsContainer}>
-            <TouchableOpacity style={[styles.actionButton, { backgroundColor: 'gray' }]} onPress={() => { setCurrent(null); setDestinationTexts({}); showStatus('Ready to scan'); focusScan(); }}>
-              <Text style={styles.actionButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton} onPress={SaveDestinationQtys}>
-              <Text style={styles.actionButtonText}>Save Quantities</Text>
-            </TouchableOpacity>
+            <MainButton title='Cancel' imageSource={require('../assets/icons/close.png')}
+              onPress={() => { setCurrent(null); setDestinationTexts({}); showStatus('Ready to scan'); focusScan(); }} />
+            <MainButton title='Save Quantities' imageSource={require('../assets/icons/ok.png')} onPress={SaveDestinationQtys} />
           </View> :
           <></>}
       </View>
@@ -1004,6 +1193,32 @@ const styles = StyleSheet.create({
   fieldButton: {
     width: 115,
     marginRight: 5,
+    flexDirection: 'row',
+  },
+  searchImage: {
+    width: 24,
+    height: 24,
+    marginRight: 5,
+  },
+  savingContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  savingCard: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    borderWidth: 5,
+    borderColor: Colors.brandBlue,
+    padding: 25,
+    alignItems: 'center',
+  },
+  savingText: {
+    marginTop: 12,
+    color: Colors.brandBlue,
+    fontSize: FontSize(18),
+    fontWeight: 'bold',
   },
   entryContainer: {
     backgroundColor: Colors.brandGreen,
@@ -1106,6 +1321,34 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: 0,
   },
+  lineQtyContainer: {
+    alignItems: 'center',
+  },
+  lineQtyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  lineStepButton: {
+    width: 34,
+    height: 42,
+    marginLeft: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.buttonBorderColor,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lineStepQtyText: {
+    width: 60,
+    marginLeft: 4,
+  },
+  lineAvailableText: {
+    width: 136,
+    marginLeft: 4,
+    fontSize: FontSize(12),
+    textAlign: 'center',
+  },
   lineDeleteButton: {
     width: 36,
     height: 42,
@@ -1139,12 +1382,6 @@ const styles = StyleSheet.create({
   lotTotalLabelText: {
     color: 'gray',
     fontSize: FontSize(12),
-  },
-  saveTransferButton: {
-    backgroundColor: Colors.brandGreen,
-  },
-  clearTransferButton: {
-    backgroundColor: 'red',
   },
   headerToggle: {
     flexDirection: 'row',
@@ -1203,6 +1440,26 @@ const styles = StyleSheet.create({
     paddingLeft: 12,
     paddingRight: 10,
   },
+  destinationQtyText: {
+    width: 64,
+    marginLeft: 0,
+  },
+  stepButton: {
+    width: 40,
+    height: 42,
+    marginHorizontal: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.buttonBorderColor,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepButtonText: {
+    color: Colors.brandBlue,
+    fontSize: FontSize(24),
+    fontWeight: 'bold',
+  },
   destinationCodeText: {
     color: 'black',
     fontSize: FontSize(16),
@@ -1225,19 +1482,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 6,
-  },
-  actionButton: {
-    width: '48.5%',
-    height: 45,
-    borderRadius: 15,
-    backgroundColor: Colors.brandBlue,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionButtonText: {
-    color: 'white',
-    fontSize: FontSize(16),
-    fontWeight: 'bold',
+    marginBottom: -4,
   },
 });
 

@@ -7,6 +7,8 @@ import { FontSize } from '../variables/ResponsiveFont';
 import DataField from '../components/controls/DataField';
 import ModalTitle from '../components/ModalTitle';
 import NumberPadModal from '../components/controls/NumberPadModal';
+import MessageBox from '../components/MessageBox';
+import PhysicalCountDifferences from '../components/lists/physicalCount/PhysicalCountDifferences';
 import PhysicalCountItemPicker from '../components/lists/physicalCount/PhysicalCountItemPicker';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
 import { PlayScanOk, PlayScanError, PlayQtyConfirmed } from '../variables/PhysicalCountSounds';
@@ -25,7 +27,7 @@ const settingsStorageKey = '@app_scanForTestingSettings';
 
 const PhysicalCountScanTestingScreen = ({ route }) => {
 
-    // Opened with a lineRecID (from View Items) the line is only shown, not counted
+    // Opened with a lineRecID (from View Items) the line is shown and its Set Total opens
     const { server, location, lineRecID: openedLineRecID } = route.params;
     const countKey = { server, location };
 
@@ -38,6 +40,7 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
 
     const [settings, setSettings] = useState(DEFAULT_SETTINGS);
     const [modePickerVisible, setModePickerVisible] = useState(false);
+    const [differencesVisible, setDifferencesVisible] = useState(false);
 
     // The session is kept in a ref so fast scans always work on the latest totals
     const sessionRef = useRef(CreateSession());
@@ -86,6 +89,8 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
                 setSession(KnowLine(sessionRef.current, openedLineRecID, openedLine.counted, openedLine.state));
                 setLine(openedLine);
                 showResult('Scan to count, or Set Total');
+                // Opened from View Items : Set Total opens directly on the line
+                OpenSetTotal(openedLineRecID, openedLine.itemReference);
             });
         }
 
@@ -380,8 +385,12 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
     const HandleSetTotal = () => {
         const lineRecID = sessionRef.current.pending?.lineRecID ?? line?.lineRecID;
         if (!lineRecID) { showResult('Scan an item first', true); return; }
+        OpenSetTotal(lineRecID, describeLine(lineRecID));
+    };
+
+    const OpenSetTotal = (lineRecID, lineText) => {
         setNumberPad({
-            title: `Set total of ${describeLine(lineRecID)}`,
+            title: `Set total of ${lineText}`,
             preview: (value) => `Total will be ${value}`,
             onSubmit: (value) => {
                 setNumberPad(null);
@@ -493,11 +502,24 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
                 </View>
             </Modal>
 
-            {/* Mode : tap to change */}
+            {/* Available qty - counted, view only : same privilege as the available qty */}
+            <PhysicalCountDifferences
+                visible={differencesVisible}
+                countKey={countKey}
+                header={header}
+                onClose={() => { setDifferencesVisible(false); focusField(scanRef); }}
+            />
+
+            {/* Mode : tap to change, List Differences at its right with the available qty privilege */}
             <View style={styles.optionsContainer}>
-                <TouchableOpacity style={styles.modeButton} onPress={() => setModePickerVisible(true)}>
+                <TouchableOpacity style={[styles.modeButton, { flex: 1 }]} onPress={() => setModePickerVisible(true)}>
                     <Text style={styles.modeButtonText} numberOfLines={1}>Mode : {MODE_LABELS[mode]} ▾</Text>
                 </TouchableOpacity>
+                {header?.showAvailableQty === 'Y' ?
+                    <TouchableOpacity style={[styles.modeButton, { marginLeft: 5 }]} onPress={() => setDifferencesVisible(true)}>
+                        <Text style={styles.modeButtonText} numberOfLines={1}>List Differences</Text>
+                    </TouchableOpacity> :
+                    <></>}
             </View>
 
             {/* Type then scan : quantity of the next scan */}
@@ -567,10 +589,11 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
                 </View> :
                 <></>}
 
-            {/* Status : blue, red when not found */}
-            <View style={[styles.statusContainer, { backgroundColor: resultIsError ? 'red' : Colors.brandBlue }]}>
+            {/* Status : blue, red when not found, tap it to read the whole message */}
+            <TouchableOpacity style={[styles.statusContainer, { backgroundColor: resultIsError ? 'red' : Colors.brandBlue }]}
+                onPress={() => MessageBox.alert(resultIsError ? 'Error' : 'Message', resultText, [{ text: 'OK', onPress: () => focusField(scanRef) }])}>
                 <Text style={styles.statusText} numberOfLines={1}>{resultText}</Text>
-            </View>
+            </TouchableOpacity>
 
             {previewText !== '' || warningText !== '' ?
                 <View style={styles.noteContainer}>
@@ -678,7 +701,8 @@ const styles = StyleSheet.create({
         backgroundColor: Colors.brandGreen,
         height: 44,
         paddingHorizontal: 5,
-        justifyContent: 'center',
+        flexDirection: 'row',
+        alignItems: 'center',
         borderBottomWidth: 1,
         borderBottomColor: 'white',
     },

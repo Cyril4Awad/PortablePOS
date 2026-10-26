@@ -1,11 +1,12 @@
 import React from 'react';
-import { View, Text, StyleSheet, Modal, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, Modal, ActivityIndicator } from 'react-native';
 import Colors from '../../../variables/Colors';
 import Sizing from '../../../variables/Sizing';
 import { FontSize } from '../../../variables/ResponsiveFont';
 import ReceivingOrderData from '../../../data/ReceivingOrderData';
 import { ClearDraft } from '../../../variables/ReceivingOrderDraft';
 import { LineIssue, LineQty, SignedQty, FormatQty, Plural, isLotItem, MODE_TITLES, DatesIssue } from '../../../variables/ReceivingOrderRules';
+import MessageBox from '../../MessageBox';
 
 // What is missing before the save ('' when the receiving order can be saved)
 export const DraftIssue = (draft) => {
@@ -49,6 +50,45 @@ export const DraftMeasTotals = (lines) => {
     return shown.length === 0 ? 'Pcs 0' : shown.join('  ·  ');
 };
 
+// The consumed qty of a line (qty in the sub unit, MOD_ConsOrdQty of FrmDO)
+export const LineConsQty = (line) => {
+    const factor = line.itemConsFactor === undefined || line.itemConsFactor === null ? 1 : Number(line.itemConsFactor);
+    return Math.round(LineQty(line) * factor * 1000) / 1000;
+};
+
+// The totals box of FrmDO (GroupBox3) : a row per measure type (pieces, kg, meters), normal / free / return consumed qty
+// The pieces row is always there, kg and meters only when the receiving order has them
+export const MeasTotalsTable = ({ lines }) => {
+    const totals = { P: { N: 0, F: 0, R: 0 } };
+    lines.forEach(line => {
+        const type = MEAS_LABELS[line.itemMeasType] ? line.itemMeasType : 'P';
+        const status = STATUS_TOTAL_LABELS[line.lineStatus] ? line.lineStatus : 'N';
+        totals[type] = totals[type] ?? { N: 0, F: 0, R: 0 };
+        totals[type][status] += LineConsQty(line);
+    });
+    const types = Object.keys(MEAS_LABELS).filter(type => totals[type]);
+    return (
+        <View style={styles.totalsTable}>
+            <View style={styles.totalsRow}>
+                <Text style={[styles.totalsCell, styles.totalsTypeCell]}></Text>
+                {Object.keys(STATUS_TOTAL_LABELS).map(status => (
+                    <Text key={status} style={[styles.totalsCell, styles.totalsHeaderText]}>{STATUS_TOTAL_LABELS[status]}</Text>
+                ))}
+            </View>
+            {types.map(type => (
+                <View key={type} style={styles.totalsRow}>
+                    <Text style={[styles.totalsCell, styles.totalsTypeCell, styles.totalsHeaderText]}>{MEAS_LABELS[type]}</Text>
+                    {Object.keys(STATUS_TOTAL_LABELS).map(status => (
+                        <Text key={status} style={[styles.totalsCell, styles.totalsValueText, status === 'R' && totals[type][status] > 0 ? { color: 'rgb(200, 60, 60)' } : null]} numberOfLines={1}>
+                            {FormatQty(Math.round(totals[type][status] * 1000) / 1000)}
+                        </Text>
+                    ))}
+                </View>
+            ))}
+        </View>
+    );
+};
+
 const Payload = (draft) => ({
     roRecID: draft.roRecID,
     supplierRecID: draft.supplier ? draft.supplier.supplierRecID.toString() : '',
@@ -85,12 +125,12 @@ export const ConfirmAndSave = async (draft, setSaving, onSaved) => {
     if (draft.mode === 'ADD') {
         try {
             if (await ReceivingOrderData.RefExists(draft.roRef.trim())) {
-                Alert.alert('RO Ref. #', `The RO Ref. # ${draft.roRef.trim()} is already used by another receiving order, change it.`);
+                MessageBox.alert('RO Ref. #', `The RO Ref. # ${draft.roRef.trim()} is already used by another receiving order, change it.`);
                 return;
             }
         }
         catch (err) {
-            Alert.alert('Not Saved', err.message);
+            MessageBox.alert('Not Saved', err.message);
             return;
         }
     }
@@ -100,7 +140,7 @@ export const ConfirmAndSave = async (draft, setSaving, onSaved) => {
         ? `Receiving order #${draft.roRecID} will be cancelled : a reverse receiving order takes its ${Plural(lines.length, 'line')} (${DraftMeasTotals(lines)}) out of the stock of ${draft.location?.locationCode}.`
         : `${draft.supplier?.supplierName}\n${Plural(lines.length, draft.mode === 'MODIFY' ? 'new line' : 'line')}, ${DraftMeasTotals(lines)} in ${draft.location?.locationCode}.`;
 
-    Alert.alert(draft.mode === 'CANCEL' ? 'Cancel Receiving Order' : MODE_TITLES[draft.mode], question, [
+    MessageBox.alert(draft.mode === 'CANCEL' ? 'Cancel Receiving Order' : MODE_TITLES[draft.mode], question, [
         { text: 'Not Now', style: 'cancel' },
         {
             text: draft.mode === 'CANCEL' ? 'Cancel RO' : 'Save', style: draft.mode === 'CANCEL' ? 'destructive' : 'default',
@@ -113,11 +153,11 @@ export const ConfirmAndSave = async (draft, setSaving, onSaved) => {
                         const done = draft.mode === 'CANCEL'
                             ? `Receiving order #${draft.roRecID} cancelled, reverse RO # ${roRecID}`
                             : draft.mode === 'MODIFY' ? `Receiving order #${roRecID} modified` : `Receiving order saved, RO # ${roRecID}`;
-                        Alert.alert('Saved', done, [{ text: 'OK', onPress: () => onSaved(roRecID) }]);
+                        MessageBox.alert('Saved', done, [{ text: 'OK', onPress: () => onSaved(roRecID) }]);
                     })
                     .catch(err => {
                         setSaving(false);
-                        Alert.alert('Not Saved', err.message);
+                        MessageBox.alert('Not Saved', err.message);
                     });
             },
         },
@@ -136,6 +176,32 @@ export const SavingModal = ({ visible }) => (
 );
 
 const styles = StyleSheet.create({
+    totalsTable: {
+        flex: 1,
+    },
+    totalsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    totalsCell: {
+        flex: 1,
+        textAlign: 'right',
+        paddingHorizontal: 3,
+    },
+    totalsTypeCell: {
+        flex: 0.7,
+        textAlign: 'left',
+    },
+    totalsHeaderText: {
+        color: Colors.brandBlue,
+        fontSize: FontSize(13),
+        fontWeight: 'bold',
+    },
+    totalsValueText: {
+        color: 'black',
+        fontSize: FontSize(15),
+        fontWeight: 'bold',
+    },
     modalContainer: {
         width: '100%',
         height: '100%',

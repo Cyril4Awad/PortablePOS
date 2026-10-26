@@ -181,6 +181,7 @@
     <Content Include="Scripts\Backoffice\Tables\006-CREATE TABLE [dbo].[STK04_ClientsGeoLocations].sql" />
     <Content Include="Scripts\Backoffice\Tables\007-CREATE TABLE [dbo].[tbl_CPP_PotentialClients].sql" />
     <Content Include="Scripts\Backoffice\Tables\008-CREATE TABLE [dbo].[tbl_CPP_Devices].sql" />
+    <Content Include="Scripts\Backoffice\Tables\012-CREATE TABLE [dbo].[_TRANSFER_tbl_upload_details].sql" />
     <Content Include="Scripts\Backoffice\Views\001-CREATE VIEW V_CPP_ClientTypes.sql" />
     <Content Include="Scripts\Backoffice\Views\002-CREATE VIEW V_CPP_Clients.sql" />
     <Content Include="Scripts\Backoffice\Views\003-CREATE VIEW V_CPP_ItemProductGroups.sql" />
@@ -215,6 +216,7 @@
     <Content Include="Scripts\Backoffice\Views\032-CREATE VIEW V_CPP_ItemBarcodes.sql" />
     <Content Include="Scripts\Backoffice\Views\034-CREATE VIEW V_CPP_RecordLocks.sql" />
     <Content Include="Scripts\Backoffice\Views\035-CREATE VIEW V_CPP_ROPendingItems.sql" />
+    <Content Include="Scripts\Backoffice\Views\036-CREATE VIEW V_CPP_TransferItems.sql" />
     <Content Include="Scripts\StandAlone - Not Used\Functions\001-CREATE FUNCTION dbo.F_CPP_VatType.sql" />
     <Content Include="Scripts\StandAlone - Not Used\Functions\002-CREATE FUNCTION dbo.F_CPP_VatValue.sql" />
     <Content Include="Scripts\StandAlone - Not Used\Procedures\001-CREATE PROCEDURE SP_CPP_GetItemPriceAndDiscount.sql" />

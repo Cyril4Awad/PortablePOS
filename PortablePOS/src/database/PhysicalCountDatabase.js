@@ -338,6 +338,19 @@ const GetLines = (countKey, counted, searchText) => {
     [countKey.server, countKey.location]);
 };
 
+// List Differences : the lines whose counted qty is not the available qty (counted or not), only with the available qty
+const GetDifferences = (countKey, searchText) => {
+  const condition = 'server = ? AND location = ? AND systemQty IS NOT NULL AND counted <> systemQty';
+  if (searchText && searchText.trim() !== '') {
+    const text = `%${searchText.trim().toUpperCase()}%`;
+    return query(
+      `SELECT * FROM PC_Lines WHERE ${condition} AND (itemReferenceUpper LIKE ? OR UPPER(itemDescription) LIKE ?)
+       ORDER BY rowNumber LIMIT 500`,
+      [countKey.server, countKey.location, text, text]);
+  }
+  return query(`SELECT * FROM PC_Lines WHERE ${condition} ORDER BY rowNumber LIMIT 500`, [countKey.server, countKey.location]);
+};
+
 const GetPendingLines = (countKey) => query(
   'SELECT lineRecID, counted FROM PC_Lines WHERE server = ? AND location = ? AND state = 1 ORDER BY rowNumber',
   [countKey.server, countKey.location]);
@@ -374,6 +387,7 @@ export default {
   SaveLineCounted,
   RestoreLineCounted,
   GetLines,
+  GetDifferences,
   GetPendingLines,
   MarkLinesUploaded,
   RestoreUploaded,

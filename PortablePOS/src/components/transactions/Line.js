@@ -2,7 +2,8 @@ import React from 'react';
 import Sizing from '../../variables/Sizing';
 import Colors from '../../variables/Colors';
 import { FontSize } from '../../variables/ResponsiveFont';
-import { View, StyleSheet, Text, TextInput, Image, TouchableOpacity, Alert } from 'react-native';
+import { View, StyleSheet, Text, TextInput, Image, TouchableOpacity } from 'react-native';
+import MessageBox from '../MessageBox';
 
 const Line = props => {
 
@@ -13,7 +14,7 @@ const Line = props => {
             if (props.itemIsPromotion === 'N') {
                 return (
                     <TouchableOpacity style={styles.lineDeleteButton} onPress={() => { 
-                        Alert.alert('Delete Line', 'Do you want to delete line ?', [
+                        MessageBox.alert('Delete Line', 'Do you want to delete line ?', [
                             {
                                 text: 'No',
                                 onPress: () => { },

@@ -22,6 +22,7 @@ import Settlement from '../components/transactions/Settlement';
 import { getCurrentDate, getLoginUserCodeName } from '../variables/LoginInfo';
 
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import MessageBox from '../components/MessageBox';
 
 const SalesInvoiceScreen = ({ route, naviagation }) => {
 
@@ -96,7 +97,7 @@ const SalesInvoiceScreen = ({ route, naviagation }) => {
         e.preventDefault();
 
         // Show confirmation alert
-        Alert.alert(
+        MessageBox.alert(
           'Discard changes?',
           'You have unsaved changes. Are you sure you want to discard them and leave the screen?',
           [

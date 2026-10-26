@@ -10,7 +10,9 @@ import TextBoxNumericField from '../components/controls/TextBoxNumericField';
 import MainButton from '../components/controls/MainButton';
 import FreeReceivingData from '../data/FreeReceivingData';
 import FreeReceivingSettings from '../configuration/FreeReceivingSettings';
-import { CheckServer, CheckMachineName, CheckPageSize } from '../variables/FreeReceivingRules';
+import DataField from '../components/controls/DataField';
+import { CheckServer, CheckPageSize } from '../variables/FreeReceivingRules';
+import { MachineNameMessage } from '../configuration/MachineName';
 
 const CONNECTION_TIMEOUT_MS = 8000;
 
@@ -50,20 +52,16 @@ const FreeReceivingSettingsScreen = () => {
   const SaveSettings = async () => {
 
     const serverAddress = server.trim().toLowerCase();
-    const machine = machineName.trim().toUpperCase();
-
-    const errorMessage = CheckServer(serverAddress) || CheckMachineName(machine) || CheckPageSize(pageSize);
+    const errorMessage = CheckServer(serverAddress) || CheckPageSize(pageSize);
     if (errorMessage !== '') {
       alert(errorMessage);
       return;
     }
 
     await FreeReceivingSettings.saveServer(serverAddress);
-    await FreeReceivingSettings.saveMachineName(machine);
     await FreeReceivingSettings.savePageSize(parseInt(pageSize, 10));
     await FreeReceivingSettings.saveRemoveCheckDigit(removeCheckDigit);
     setServer(serverAddress);
-    setMachineName(machine);
     TestConnection(serverAddress);
     alert('Settings Saved');
 
@@ -112,15 +110,13 @@ const FreeReceivingSettingsScreen = () => {
 
           <View style={styles.fieldsRow}>
             <View style={styles.fieldHalf}>
-              <TextBoxField
+              {/* The name of the device, changed in the Settings of the device (read only here) */}
+              <DataField
                 title='Machine Name'
-                value={machineName}
-                maxLength={5}
-                multiline={false}
-                numberOfLines={1}
-                autoCapitalize='characters'
-                autoCorrect={false}
-                onChangeText={setMachineName} />
+                data={machineName === '' ? 'Not Valid' : machineName}
+                toolTip='Device Name'
+                onPress={() => alert(machineName === '' ? MachineNameMessage() : 'The machine name is the name of the device, change it in the Settings of the device : About phone > Device name.')}
+              />
             </View>
             <View style={styles.fieldHalf}>
               <TextBoxNumericField

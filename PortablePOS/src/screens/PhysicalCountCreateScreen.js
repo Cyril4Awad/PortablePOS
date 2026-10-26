@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useLayoutEffect } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, Modal, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
@@ -16,8 +16,11 @@ import PhysicalCountMachineCounts from '../components/lists/physicalCount/Physic
 import PhysicalCountData from '../data/PhysicalCountData';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
 import PhysicalCountSettings from '../configuration/PhysicalCountSettings';
+import MessageBox from '../components/MessageBox';
+import { MachineNameMessage } from '../configuration/MachineName';
 import {
-  BOOKS_OPTIONS, GROUPS, EmptyFilters, GroupSummary, NotCountedSummary, CheckDateRange,
+  BOOKS_OPTIONS, GROUPS, EmptyFilters, WithoutGroups, GroupSummary, NotCountedSummary, CheckDateRange,
+  RememberedSelection, ForgetSelection,
 } from '../variables/PhysicalCountCreateRules';
 
 // Create Physical Count, step 1 : filters, like the count module of the ERP
@@ -76,16 +79,13 @@ const PhysicalCountCreateScreen = props => {
 
   };
 
-  // Clear is in the title bar : Show Items and My Counts fit on one row, the screen of the portable scanners has no room for a second one
-  useLayoutEffect(() => {
-    props.navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity style={styles.headerButton} onPress={() => setFilters(EmptyFilters())}>
-          <Text style={styles.headerButtonText}>Clear</Text>
-        </TouchableOpacity>
-      ),
-    });
-  }, [props.navigation]);
+  // A new visit of the page starts without the items checked last time
+  useEffect(() => ForgetSelection(), []);
+
+  // Check All / Uncheck All on the items removed the brands, categories... (they would check their items again)
+  useEffect(() => {
+    if (props.route.params?.groupsRemovedAt) setFilters(current => WithoutGroups(current));
+  }, [props.route.params?.groupsRemovedAt]);
 
   // Reload when coming back from the settings
   useFocusEffect(
@@ -100,7 +100,7 @@ const PhysicalCountCreateScreen = props => {
       alert('Please select a location in the physical count settings');
     }
     else if (machineName === '') {
-      alert('Please fill the machine name in the physical count settings');
+      alert(MachineNameMessage());
     }
     else if (serverData === null) {
       alert(errorText !== '' ? errorText : 'The location is not loaded yet');
@@ -109,9 +109,12 @@ const PhysicalCountCreateScreen = props => {
       props.navigation.navigate('PhysicalCountCreateItems', {
         server: profile.server,
         location: profile.location,
+        locationDescription: serverData.locationDescription ?? '',
         machineName: machineName,
         showAvailableQty: serverData.showAvailableQty,
         filters: filters,
+        // the items checked last time, only while the filters are the same
+        selection: RememberedSelection(filters),
       });
     }
 
@@ -123,7 +126,7 @@ const PhysicalCountCreateScreen = props => {
       alert('Please select a location in the physical count settings');
     }
     else if (machineName === '') {
-      alert('Please fill the machine name in the physical count settings');
+      alert(MachineNameMessage());
     }
     else {
       setMyCountsVisible(true);
@@ -136,8 +139,8 @@ const PhysicalCountCreateScreen = props => {
 
     const onDevice = deviceCountNumber === countNumber;
 
-    Alert.alert('Download Physical Count',
-      onDevice ? `Physical count ${countNumber} is already on this device. Download it again ?` : `Download physical count ${countNumber} now ?`, [
+    MessageBox.alert('Download Physical Count',
+      onDevice ? `Physical count # ${countNumber} is already on this device. Download it again ?` : `Download physical count # ${countNumber} now ?`, [
       { text: 'No', style: 'cancel' },
       {
         text: 'Download', onPress: () => {
@@ -233,7 +236,7 @@ const PhysicalCountCreateScreen = props => {
           <View style={styles.fieldHalf}>
             <ChoiceField
               title='Machine'
-              value={machineName === '' ? 'Not Defined' : machineName}
+              value={machineName === '' ? 'Not Valid' : machineName}
               onPress={() => props.navigation.navigate('PhysicalCountSettings')}
               style={{ borderBottomWidth: 0 }}
             />
@@ -268,6 +271,8 @@ const PhysicalCountCreateScreen = props => {
 
           <MainButton title='My Counts' imageSource={require('../assets/icons/download.png')} onPress={() => OpenMyCounts()} />
 
+          <MainButton title='Clear' imageSource={require('../assets/icons/deleteLine.png')} onPress={() => setFilters(EmptyFilters())} />
+
         </View>
 
       </View>
@@ -283,16 +288,6 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: Colors.bgColor,
     height: '100%',
-  },
-  headerButton: {
-    paddingHorizontal: 12,
-    height: '100%',
-    justifyContent: 'center',
-  },
-  headerButtonText: {
-    color: Colors.navTitleColor,
-    fontSize: FontSize(14),
-    fontWeight: 'bold',
   },
   fieldsRow: {
     flexDirection: 'row',

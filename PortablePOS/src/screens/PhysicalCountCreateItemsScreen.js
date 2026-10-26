@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, Alert, Vibration } from 'react-native';
+import { CommonActions } from '@react-navigation/native';
+import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, Vibration } from 'react-native';
 import SwitchSelector from 'react-native-switch-selector';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
@@ -8,7 +9,8 @@ import LoadingData from '../components/LoadingData';
 import PhysicalCountCreateLine from '../components/lists/physicalCount/PhysicalCountCreateLine';
 import PhysicalCountData, { NewRequestID, CREATE_TIMEOUT_MESSAGE } from '../data/PhysicalCountData';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
-import { HasGroups, CreateSelection, CheckAll, UncheckAll, IsChecked, ToggleItem } from '../variables/PhysicalCountCreateRules';
+import { HasGroups, WithoutGroups, CreateSelection, CheckAll, UncheckAll, IsChecked, ToggleItem, RememberSelection } from '../variables/PhysicalCountCreateRules';
+import MessageBox from '../components/MessageBox';
 
 const PAGE_SIZE = 100;
 const SEARCH_DELAY_MS = 500;
@@ -27,16 +29,24 @@ const CHECKED_ITEMS = 1;
 // when no item has it exactly the items containing the text are shown (nothing is checked)
 const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
 
-  const { server, location, machineName, filters } = route.params;
+  const { server, location, locationDescription, machineName } = route.params;
+
+  // Kept in a ref too : Check All / Uncheck All remove the brands, categories... (read by the page loaded right after)
+  const [filters, setFiltersState] = useState(route.params.filters);
+  const filtersRef = useRef(filters);
+  const setFilters = (value) => { filtersRef.current = value; setFiltersState(value); };
 
   // The checked brands, categories... check their items : the list opens on the checked items
-  const [view, setView] = useState(HasGroups(filters) ? CHECKED_ITEMS : ALL_ITEMS);
+  // Shown again with the same filters : the items checked last time (Check All, items checked by hand...)
+  const initialSelection = route.params.selection ?? CreateSelection();
+
+  const [view, setView] = useState(HasGroups(filters) || route.params.selection ? CHECKED_ITEMS : ALL_ITEMS);
   const [searchString, setSearchString] = useState('');
 
   // Kept in a ref too : checking an item works on the latest selection without redrawing every line
-  const [selection, setSelectionState] = useState(CreateSelection());
+  const [selection, setSelectionState] = useState(initialSelection);
   const selectionRef = useRef(selection);
-  const setSelection = (value) => { selectionRef.current = value; setSelectionState(value); };
+  const setSelection = (value) => { selectionRef.current = value; setSelectionState(value); RememberSelection(filtersRef.current, value); };
 
   const [items, setItems] = useState([]);
   const [totalItems, setTotalItems] = useState(0);
@@ -67,7 +77,7 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
 
     try {
 
-      const result = await PhysicalCountData.GetPhysicalCountItems(server, location, filters, currentSelection,
+      const result = await PhysicalCountData.GetPhysicalCountItems(server, location, filtersRef.current, currentSelection,
         search, onlySelected, after, PAGE_SIZE, exactMatch);
 
       if (id !== requestID.current) return null;
@@ -113,8 +123,22 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
     setSelection(ToggleItem(current, item));
   }, []);
 
+  // Sets params of the filters page (the screen before this one)
+  const SetFiltersPageParams = (params) => {
+    const state = navigation.getState();
+    const filtersRoute = state.routes[state.index - 1];
+    if (filtersRoute) navigation.dispatch({ ...CommonActions.setParams(params), source: filtersRoute.key });
+  };
+
+  // The brands, categories... are removed here and on the filters page, so going back and showing the items again
+  // keeps Check All / Uncheck All instead of checking the items of the brands, categories... again
   const ChangeAll = (newSelection) => {
     setStatus(null);
+    if (HasGroups(filtersRef.current)) {
+      setFilters(WithoutGroups(filtersRef.current));
+      // setSelection below remembers the selection with the filters without the brands, categories...
+      SetFiltersPageParams({ groupsRemovedAt: Date.now() });
+    }
     setSelection(newSelection);
     LoadPage(null, newSelection, true);
   };
@@ -179,7 +203,7 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
       return;
     }
 
-    Alert.alert('Create Physical Count', `Create a physical count of ${checkedCount} items for machine ${machineName} ?`, [
+    MessageBox.alert('Create Physical Count', `Create a physical count of ${checkedCount} items for machine ${machineName} ?`, [
       { text: 'No', style: 'cancel' },
       { text: 'Yes', onPress: () => RunCreate() },
     ]);
@@ -198,7 +222,7 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
 
     for (let attempt = 1; attempt <= CREATE_TRIES && result === null; attempt++) {
       try {
-        result = await PhysicalCountData.CreatePhysicalCount(server, location, machineName, filters, selectionRef.current, '', requestID);
+        result = await PhysicalCountData.CreatePhysicalCount(server, location, machineName, filtersRef.current, selectionRef.current, '', requestID);
       } catch (error) {
         lastError = error;
         if (!CanTryAgain(error)) break;
@@ -215,7 +239,7 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
     }
 
     // Back to the Physical Count page, which offers to download the new count
-    Alert.alert('Physical Count Created', `Physical Count ${result.countNumber}\n${result.itemsCount} Items - ${result.linesCount} Lines`, [
+    MessageBox.alert('Physical Count Created', `Physical Count # ${result.countNumber}\n${result.itemsCount} Items\n${result.linesCount} items total including expiries`, [
       {
         text: 'OK', onPress: () => navigation.reset({
           index: 1,
@@ -232,6 +256,11 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
 
   return (
     <View style={styles.container}>
+
+      {/* The location the count is created for */}
+      <View style={styles.locationContainer}>
+        <Text style={styles.locationText} numberOfLines={1}>Location {location}{locationDescription ? ` - ${locationDescription}` : ''}  ·  Machine {machineName}</Text>
+      </View>
 
       <View style={styles.searchContainer}>
         <TextInput
@@ -316,6 +345,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.bgColor,
+  },
+  locationContainer: {
+    height: 30,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    backgroundColor: Colors.listItemBackColor,
+    borderBottomWidth: 1,
+    borderBottomColor: 'silver',
+  },
+  locationText: {
+    color: Colors.brandBlue,
+    fontSize: FontSize(15),
+    fontWeight: 'bold',
   },
   searchContainer: {
     width: '100%',

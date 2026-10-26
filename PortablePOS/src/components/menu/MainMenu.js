@@ -9,8 +9,10 @@ import Sizing from '../../variables/Sizing';
 import { getCashRegisterCode } from '../../variables/CashierInfo';
 import LoadingData from '../LoadingData';
 import MenuData from '../../data/MenuData';
+import { CheckServer, LastIsOnline } from '../../variables/ConnectionStatus';
 
 // menuActive here is only the fallback, the effective value comes from tbl_CPP_ControlizedMenu
+// worksOffline : the screen opens when the server does not answer (the other screens need the server)
 export const STEPS = [
     // {
     //     recKey: 'O',
@@ -159,7 +161,8 @@ export const STEPS = [
         description: 'Receive supplier items offline',
         imageSource: require('../../assets/icons/freeReceiving.png'),
         menuActive: true,
-        needCashRegister: false
+        needCashRegister: false,
+        worksOffline: true
     },
     {
         recKey: 'T7',
@@ -209,7 +212,8 @@ export const STEPS = [
         description: 'Count stock offline and upload the counted quantities',
         imageSource: require('../../assets/icons/barcode.png'),
         menuActive: true,
-        needCashRegister: false
+        needCashRegister: false,
+        worksOffline: true
     },
     {
         recKey: 'L',
@@ -318,6 +322,13 @@ const MainMenu = props => {
                     onPress={() => {
                         if (menuItem.item.needCashRegister && getCashRegisterCode() === '') {
                             alert('Invalid or Inactive Cash Register')
+                        }
+                        else if (!menuItem.item.worksOffline && LastIsOnline() === false) {
+                            // checked again so the next tap opens the screen once the server answers
+                            CheckServer();
+                            alert(`You are offline : ${menuItem.item.title} needs the connection to the server.
+
+Connect to the network of the server and try again. Only Free Receiving and Physical Count work offline.`);
                         }
                         else {
                             props.navigation.navigate(menuItem.item.stackScreen)

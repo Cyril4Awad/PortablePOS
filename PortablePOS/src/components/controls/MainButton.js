@@ -5,7 +5,10 @@ import Sizing from '../../variables/Sizing';
 import { FontSize } from '../../variables/ResponsiveFont';
 
 // imageSource (optional) : icon shown at the left of the title, the button is taller with an icon
+// secondImageSource (optional) : a second icon next to the first one, both smaller so the title still fits
 const MainButton = props => {
+
+    const imageStyle = props.secondImageSource ? [styles.buttonImage, styles.buttonImageSmall] : styles.buttonImage;
 
     return (
         <View style={[styles.container, props.imageSource ? styles.containerWithImage : null]}>
@@ -13,11 +16,18 @@ const MainButton = props => {
                 {props.imageSource ?
                     <Image
                         source={props.imageSource}
-                        style={styles.buttonImage}
+                        style={imageStyle}
                         resizeMode="contain"
                     /> :
                     <></>}
-                <Text style={styles.buttonText} numberOfLines={1}>{props.title}</Text>
+                {props.secondImageSource ?
+                    <Image
+                        source={props.secondImageSource}
+                        style={imageStyle}
+                        resizeMode="contain"
+                    /> :
+                    <></>}
+                <Text style={styles.buttonText} numberOfLines={1} adjustsFontSizeToFit={true} minimumFontScale={0.75}>{props.title}</Text>
             </TouchableOpacity>
         </View>
     );
@@ -54,6 +64,11 @@ const styles = StyleSheet.create({
         width: 32,
         height: 32,
         marginRight: 6,
+    },
+    buttonImageSmall: {
+        width: 24,
+        height: 24,
+        marginRight: 3,
     },
     buttonText: {
         fontSize: FontSize(18),

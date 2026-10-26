@@ -6619,45 +6619,242 @@ Public Class DataService
 
     End Function
 
-    'Counts of the download, decimals of the quantities (SP_DecNo), currencies of the prices
-    'Returns {locationCode, locationDescription, itemsCount, lotsCount, barcodesCount, decimals, currencyLC, currencyCC}
+    'The location we transfer from and the decimals of the quantities (SP_DecNo)
+    'Returns {locationCode, locationDescription, decimals}
     Public Function GetTransferInfo(location As String) As String Implements IDataService.GetTransferInfo
 
         Try
 
-            Dim errorMessage As String = TransferLocationCheck(location)
+            Dim errorMessage As String = TransferServerLocationCheck(location)
             If errorMessage <> "" Then Return "Error " & errorMessage
 
-            Using cnsql As New SqlConnection(DecryptString(ServerSent.lcConSql, DecPS("REDACTED")))
+            Using dtInfo As DataTable = TransferRead(" SELECT locationCode , locationDescription ,
+                                                              ( SELECT TOP 1 ISNULL(CONVERT(VARCHAR, SP_DecNo), '0') FROM dbo.stk04_SysParam ) decimals
+                                                       FROM   V_CPP_TransferLocations
+                                                       WHERE  locationCode = @Location ", location)
+
+                If dtInfo.Rows.Count = 0 Then Return $"Error Location {location.Trim} Cannot Be Used For Transfers"
+
+                Return New JavaScriptSerializer().Serialize(LabelRows(dtInfo)(0))
+
+            End Using
+
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
+
+    End Function
+
+    'The stock search of Transfer : every lot of the location with an available qty (less the transfers saved and not uploaded yet)
+    'of the items that can be transferred, the device searches them by product group, reference, barcode or description
+    'Returns [{TransferLotColumns}, ...]
+    Public Function GetTransferStock(location As String) As String Implements IDataService.GetTransferStock
+
+        Try
+
+            Dim errorMessage As String = TransferServerLocationCheck(location)
+            If errorMessage <> "" Then Return "Error " & errorMessage
+
+            Using dtLots As DataTable = TransferRead($" SELECT {TransferLotColumns(TransferLotAvailable)}
+                                                         {TransferLotsFrom}
+                                                         WHERE  S.locationCode = @Location AND {TransferLotAvailable} > 0 AND I.itemFourthParty <> 'Y'
+                                                         ORDER BY I.itemDescription , S.lotExpiryDt , S.lotRecID ", location)
+                If dtLots.Rows.Count = 0 Then Return ""
+                Return GetJson(dtLots)
+            End Using
+
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
+
+    End Function
+
+    'A code scanned or typed (GetItem of frmTransferStock) : a barcode, a single reference or the reference of an item that can be transferred,
+    'else the items whose reference starts with it (50 at most). The link of a label QR is the item itself
+    'One row per lot with an available qty, an item without one has a row with lotRecID "" (its available qty is 0)
+    'Returns [{TransferLotColumns}, ...], "" when no item that can be transferred has this code
+    Public Function FindTransferItem(location As String, code As String) As String Implements IDataService.FindTransferItem
+
+        Try
+
+            Dim errorMessage As String = TransferServerLocationCheck(location)
+            If errorMessage <> "" Then Return "Error " & errorMessage
+
+            Dim search As String = If(code, "").Replace(vbCr, "").Replace(vbLf, "").Trim
+            If search = "" Then Return ""
+
+            Dim linkRecID As String = ItemRecIDFromLink(search)
+            Dim itemsSql As String
+            If linkRecID <> "" Then
+                itemsSql = $" SELECT I.itemRecID FROM V_CPP_TransferItems I WHERE I.itemRecID = {CDec(linkRecID).ToString("0", Globalization.CultureInfo.InvariantCulture)} "
+            Else
+                itemsSql = " SELECT I.itemRecID FROM V_CPP_TransferItems I
+                             WHERE  I.itemReference = @Code OR I.itemSingleRef1 = @Code OR I.itemSingleRef2 = @Code
+                                    OR EXISTS ( SELECT TOP 1 1 FROM V_CPP_ReceivingItemCodes C WHERE C.itemRecID = I.itemRecID AND C.codeKind = 'barcode' AND C.codeValue = @Code ) "
+            End If
+
+            Dim lotsSql As String = $" SELECT {TransferLotColumns("ISNULL(S.lotLeft, 0)")}
+                                       FROM   V_CPP_TransferItems I
+                                              LEFT JOIN ( SELECT S.* , {TransferLotAvailable} [lotLeft]
+                                                          {TransferLotsFrom.Replace("INNER JOIN V_CPP_TransferItems I ON I.itemRecID = S.itemRecID", "")}
+                                                          WHERE S.locationCode = @Location AND {TransferLotAvailable} > 0 ) S ON S.itemRecID = I.itemRecID
+                                       WHERE  I.itemRecID IN ( ##ITEMS## )
+                                       ORDER BY I.itemReference , S.lotExpiryDt , S.lotRecID "
+
+            Using cnsql As New SqlConnection(ROConnectionString())
 
                 cnsql.Open()
 
-                Using cmsql As New SqlCommand(" SELECT  locationCode ,
-                                                        locationDescription ,
-                                                        ( SELECT COUNT(*) FROM V_CPP_ReceivingItems ) itemsCount ,
-                                                        ( SELECT COUNT(*) FROM V_CPP_TransferStock WHERE locationCode = @Location AND lotAvailable > 0 ) lotsCount ,
-                                                        ( SELECT COUNT(*) FROM V_CPP_ReceivingItemCodes WHERE codeKind = 'barcode' ) barcodesCount ,
-                                                        ( SELECT TOP 1 ISNULL(CONVERT(VARCHAR, SP_DecNo), '0') FROM dbo.stk04_SysParam ) decimals ,
-                                                        ISNULL(( SELECT TOP 1 currencyLC FROM V_CPP_LabelCurrencies WHERE companyCode = @CompCode ), '') currencyLC ,
-                                                        ISNULL(( SELECT TOP 1 currencyCC FROM V_CPP_LabelCurrencies WHERE companyCode = @CompCode ), '') currencyCC
-                                                FROM    V_CPP_TransferLocations
-                                                WHERE   locationCode = @Location ", cnsql)
+                Dim parameters = Function() As SqlParameter()
+                                     Return {TransferParam("@Location", location), New SqlParameter("@Code", SqlDbType.NVarChar, 100) With {.Value = search},
+                                             New SqlParameter("@Start", SqlDbType.NVarChar, 102) With {.Value = search.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]") & "%"}}
+                                 End Function
 
-                    cmsql.CommandTimeout = 600
-                    cmsql.Parameters.Add("@Location", SqlDbType.VarChar, 2).Value = location.Trim
-                    cmsql.Parameters.Add("@CompCode", SqlDbType.VarChar, 2).Value = If(ConfigurationManager.AppSettings("CompCode"), "").Trim
+                'The items first, then their lots (one query with both takes a long time when no item has the code)
+                Dim itemIDs = Function(sql As String) As List(Of String)
+                                  Return RORead(cnsql, Nothing, " SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; " & sql, parameters()).Rows.Cast(Of DataRow) _
+                                             .Select(Function(row) CDec(row("itemRecID")).ToString("0", Globalization.CultureInfo.InvariantCulture)).ToList
+                              End Function
+                Dim items As List(Of String) = itemIDs(itemsSql)
+                If items.Count = 0 AndAlso linkRecID = "" Then
+                    items = itemIDs(" SELECT TOP 50 I.itemRecID FROM V_CPP_TransferItems I WHERE I.itemReference LIKE @Start ORDER BY I.itemReference ")
+                End If
+                If items.Count = 0 Then Return ""
 
-                    Using dtInfo As New DataTable
+                Dim dtLots As DataTable = RORead(cnsql, Nothing, " SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; " & lotsSql.Replace("##ITEMS##", String.Join(",", items)), parameters())
 
-                        Using daSql As New SqlDataAdapter(cmsql)
-                            daSql.Fill(dtInfo)
-                        End Using
+                If dtLots.Rows.Count = 0 Then Return ""
+                Return GetJson(dtLots)
 
-                        If dtInfo.Rows.Count = 0 Then Return $"Error Location {location.Trim} Cannot Be Used For Transfers"
+            End Using
 
-                        Return New JavaScriptSerializer().Serialize(LabelRows(dtInfo)(0))
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
 
-                    End Using
+    End Function
+
+    'The available qty now of the lots of the transfer being prepared (less the transfers saved and not uploaded yet), 0 when a lot has none
+    'lotRecIDs : the lot record ids separated by commas. Returns [{lotRecID, lotAvailable}, ...]
+    Public Function GetTransferLotsAvailable(location As String, lotRecIDs As String) As String Implements IDataService.GetTransferLotsAvailable
+
+        Try
+
+            Dim errorMessage As String = TransferServerLocationCheck(location)
+            If errorMessage <> "" Then Return "Error " & errorMessage
+
+            Dim ids As New List(Of String)
+            For Each part As String In If(lotRecIDs, "").Split(","c)
+                Dim value As Decimal
+                If Decimal.TryParse(part.Trim, Globalization.NumberStyles.Integer, Globalization.CultureInfo.InvariantCulture, value) Then ids.Add(value.ToString("0", Globalization.CultureInfo.InvariantCulture))
+            Next
+            If ids.Count = 0 Then Return ""
+
+            Using dtLots As DataTable = TransferRead($" SELECT CONVERT(VARCHAR(18), S.lotRecID) lotRecID , {TransferLotAvailable} lotAvailable
+                                                         {TransferLotsFrom}
+                                                         WHERE  S.locationCode = @Location AND S.lotRecID IN ( {String.Join(",", ids.Distinct)} ) ", location)
+                If dtLots.Rows.Count = 0 Then Return ""
+                Return GetJson(dtLots)
+            End Using
+
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
+
+    End Function
+
+    'The columns of a lot row : the lot (alias S, lotRecID "" when the item has no lot) and its item (alias I), available : the qty left
+    Private Function TransferLotColumns(available As String) As String
+        Return $" ISNULL(CONVERT(VARCHAR(18), S.lotRecID), '') lotRecID , CONVERT(VARCHAR(18), I.itemRecID) itemRecID , I.itemReference , I.itemDescription ,
+                                                   I.itemUnit , I.itemSingleRef1 , I.itemSingleRef2 , I.itemProductGroup , I.itemProductGroupDesc , I.itemFourthParty ,
+                                                   ISNULL(( SELECT TOP 1 C.codeValue FROM V_CPP_ReceivingItemCodes C WHERE C.itemRecID = I.itemRecID AND C.codeKind = 'barcode' ORDER BY C.codeRecID ), '') itemBarcode ,
+                                                   ISNULL(S.lotExpiry, '') lotExpiry , ISNULL(S.lotBatch, '') lotBatch , ISNULL(S.lotColor, '') lotColor ,
+                                                   ISNULL(S.lotGrid, '') lotGrid , ISNULL(S.lotSize, '') lotSize , {available} lotAvailable "
+    End Function
+
+    'A query of the location (read uncommitted like the ERP : a transaction open in the ERP does not block it), the location as VARCHAR
+    Private Function TransferRead(sql As String, location As String) As DataTable
+        Using cnsql As New SqlConnection(ROConnectionString())
+            cnsql.Open()
+            Return RORead(cnsql, Nothing, " SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; " & sql, TransferParam("@Location", location))
+        End Using
+    End Function
+
+    Private Function TransferParam(name As String, value As String) As SqlParameter
+        Return New SqlParameter(name, SqlDbType.VarChar, 10) With {.Value = If(value, "").Trim}
+    End Function
+
+    'The lots of a location (alias S) with their item (alias I) and the qty of the transfers saved by the portables and not uploaded yet (alias P)
+    Private Const TransferLotsFrom As String = " FROM V_CPP_TransferStock S
+                                                  INNER JOIN V_CPP_TransferItems I ON I.itemRecID = S.itemRecID
+                                                  OUTER APPLY ( SELECT SUM(ISNULL(TRY_CONVERT(NUMERIC(18, 3), U.TransferQty), 0)) [pendingQty]
+                                                                FROM   dbo._TRANSFER_tbl_upload_details U
+                                                                WHERE  ISNULL(U.Uploaded, 'N') = 'N'
+                                                                       AND U.FromLoc = S.locationCode
+                                                                       AND U.STK_RECID = CONVERT(NVARCHAR(50), S.itemRecID)
+                                                                       AND ISNULL(U.Expiry_Dt, '') = S.lotExpiryDt
+                                                                       AND ISNULL(U.Lot_Nbr, '') = S.lotBatch
+                                                                       AND ISNULL(U.Color, '') = S.lotColor
+                                                                       AND ISNULL(U.Size, '') = S.lotSize ) P "
+
+    'The qty that can still be transferred from a lot of TransferLotsFrom
+    Private Const TransferLotAvailable As String = " ( S.lotAvailable - ISNULL(P.pendingQty, 0) ) "
+
+    'Saves the transfer prepared on the portable into _TRANSFER_tbl_upload_details (uploaded later to the ERP), one transfer per destination
+    'The checks of btnConfirm / LineKeyDown of frmTransferStock : the destinations, the items that can be transferred and the available qty
+    'of the location (all the lines of a lot together, less the transfers saved and not uploaded yet), all the lines or none
+    'saveID : the id of this save on the device, the same id saved again (no answer received) is not saved twice
+    'transfer : [{itemRecID, lotRecID, destination, qty}, ...]
+    'Returns {alreadySaved, transfers: [{transferID, destination, lines, qty}, ...]}
+    Public Function SaveTransfer(location As String, machineName As String, saveID As String, transfer As String) As String Implements IDataService.SaveTransfer
+
+        Try
+
+            Dim errorMessage As String = TransferServerLocationCheck(location)
+            If errorMessage <> "" Then Return "Error " & errorMessage
+
+            Dim machine As String = If(machineName, "").Trim
+            Dim save As String = If(saveID, "").Trim
+            If machine = "" OrElse save = "" OrElse save.Length > 40 Then Return "Error Missing Data"
+            If machine.Length > 50 Then machine = machine.Substring(0, 50)
+
+            Dim lines As JArray = JArray.Parse(If(transfer, "[]"))
+            If lines.Count = 0 Then Return "Error No Items To Send"
+
+            Using cnsql As New SqlConnection(ROConnectionString())
+
+                cnsql.Open()
+
+                'The stock is read uncommitted like the ERP does : a transaction left open in the ERP does not block the save
+                'The saves are one at a time (application lock), so two portables cannot send the same available qty
+                Using trnsql As SqlTransaction = cnsql.BeginTransaction(IsolationLevel.ReadUncommitted)
+
+                    Try
+
+                        Dim lockResult As Integer = CInt(ROScalar(cnsql, trnsql, " DECLARE @Result INT
+                                                                                    EXEC @Result = sp_getapplock @Resource = 'CPP_TransferSave', @LockMode = 'Exclusive',
+                                                                                                                 @LockOwner = 'Transaction', @LockTimeout = 30000
+                                                                                    SELECT @Result "))
+                        If lockResult < 0 Then
+                            trnsql.Rollback()
+                            Return "Error The server is busy saving another transfer, press Save Transfer again"
+                        End If
+
+                        Dim result As String = TransferSave(cnsql, trnsql, location.Trim, machine, save, lines)
+                        If result.StartsWith("Error") Then
+                            trnsql.Rollback()
+                        Else
+                            trnsql.Commit()
+                        End If
+                        Return result
+
+                    Catch
+                        Try
+                            trnsql.Rollback()
+                        Catch exTRN As Exception
+                        End Try
+                        Throw
+                    End Try
 
                 End Using
 
@@ -6669,97 +6866,166 @@ Public Class DataService
 
     End Function
 
-    'The active items with their price in the location (0 when it has none), afterRecID : "" for the first page, else the last itemRecID stored
-    'The single references are codes a scan matches too (the same items as V_CPP_LabelItems : active ones)
-    'Returns [{itemRecID, itemReference, itemDescription, itemUnit, itemSingleRef1, itemSingleRef2, priceLC, priceCC}, ...], "" after the last page
-    Public Function GetTransferItems(location As String, afterRecID As String, pageSize As Integer) As String Implements IDataService.GetTransferItems
+    Private Function TransferSave(cnsql As SqlConnection, trnsql As SqlTransaction, location As String, machine As String, save As String, lines As JArray) As String
 
-        Try
+        Dim invariant As Globalization.CultureInfo = Globalization.CultureInfo.InvariantCulture
 
-            Dim errorMessage As String = TransferLocationCheck(location)
-            If errorMessage <> "" Then Return "Error " & errorMessage
+        'Saved already : the answer of the first save did not reach the device
+        Dim dtSaved As DataTable = RORead(cnsql, trnsql, " SELECT [_id] [transferID] , MAX(ToLoc) [destination] , COUNT(*) [lines] , SUM(ISNULL(TRY_CONVERT(NUMERIC(18, 3), TransferQty), 0)) [qty]
+                                                          FROM   dbo._TRANSFER_tbl_upload_details
+                                                          WHERE  [_id] LIKE @SaveLike AND Machine = @Machine
+                                                          GROUP BY [_id] ",
+                                          ROParam("@SaveLike", save.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]") & "-%"), ROParam("@Machine", machine))
+        If dtSaved.Rows.Count > 0 Then
+            Dim saved As New JObject
+            saved("alreadySaved") = True
+            saved("transfers") = ROJArray(dtSaved)
+            Return saved.ToString(Newtonsoft.Json.Formatting.None)
+        End If
 
-            Dim after As Decimal
-            errorMessage = ReceivingPageCheck(afterRecID, pageSize, after)
-            If errorMessage <> "" Then Return "Error " & errorMessage
+        Dim destinations As New HashSet(Of String)(RORead(cnsql, trnsql, " SELECT locationCode FROM V_CPP_TransferLocations WHERE locationCode <> @Location ",
+                                                          ROParam("@Location", location)).Rows.Cast(Of DataRow).Select(Function(row) row("locationCode").ToString.Trim.ToUpper))
 
-            Return TransferPage($" SELECT TOP {pageSize} CONVERT(VARCHAR(18), items.itemRecID) itemRecID ,
-                                                      items.itemReference ,
-                                                      items.itemDescription ,
-                                                      items.itemUnit ,
-                                                      items.itemSingleRef1 ,
-                                                      items.itemSingleRef2 ,
-                                                      ROUND(ISNULL(prices.priceLC, 0), 0) priceLC ,
-                                                      ROUND(ISNULL(prices.priceCC, 0), 2) priceCC
-                                    FROM     V_CPP_ReceivingItems items
-                                             OUTER APPLY ( SELECT TOP 1 priceLC , priceCC
-                                                           FROM   V_CPP_LabelItemPrices
-                                                           WHERE  itemRecID = items.itemRecID
-                                                                  AND locationCode = @Location
-                                                                  AND companyCode = @CompCode ) prices
-                                    WHERE    items.itemRecID > @After
-                                    ORDER BY items.itemRecID ", after, location)
+        'The lines of each lot and destination, the qty of the lines of the same lot and destination are added
+        Dim qtys As New Dictionary(Of String, Decimal)
+        Dim lotQtys As New Dictionary(Of Decimal, Decimal)
+        For Each line As JObject In lines
+            Dim lotRecID, qty As Decimal
+            Dim destination As String = If(line.Value(Of String)("destination"), "").Trim.ToUpper
+            If destination = "" Then Return "Error Missing Data"
+            If Not destinations.Contains(destination) Then Return "Error Invalid Location Code"
+            If Not Decimal.TryParse(If(line.Value(Of String)("lotRecID"), ""), Globalization.NumberStyles.Number, invariant, lotRecID) Then Return "Error Item Not Found Or Not Active"
+            If Not Decimal.TryParse(If(line.Value(Of String)("qty"), ""), Globalization.NumberStyles.Number, invariant, qty) OrElse qty <= 0 Then Return "Error Quantity Cannot Be Null or Zero"
+            Dim key As String = lotRecID.ToString(invariant) & "|" & destination
+            qtys(key) = If(qtys.ContainsKey(key), qtys(key), 0D) + qty
+            lotQtys(lotRecID) = If(lotQtys.ContainsKey(lotRecID), lotQtys(lotRecID), 0D) + qty
+        Next
 
-        Catch ex As Exception
-            Return "Error " & ex.Message
-        End Try
+        'The lots with their item (only the items that can be transferred) and their available qty
+        Dim dtLots As DataTable = RORead(cnsql, trnsql, $" SELECT  S.lotRecID , S.itemRecID , S.lotExpiryDt , S.lotBatch , S.lotColor , S.lotSize , {TransferLotAvailable} [lotLeft] ,
+                                                                   I.itemReference , I.itemDescription , I.itemBrandName , I.itemSingleRef1 , I.itemSingleRef2 , I.itemClass ,
+                                                                   I.itemService , I.itemFourthParty , I.itemProductGroupDesc ,
+                                                                   ISNULL(( SELECT TOP 1 C.codeValue FROM V_CPP_ReceivingItemCodes C WHERE C.itemRecID = S.itemRecID AND C.codeKind = 'barcode' ORDER BY C.codeRecID ), '') [itemBarcode]
+                                                           {TransferLotsFrom}
+                                                           WHERE   S.locationCode = @Location
+                                                                   AND S.lotRecID IN ( {String.Join(",", lotQtys.Keys.Select(Function(key) key.ToString(invariant)))} ) ",
+                                         ROParam("@Location", location), ROParam("@CompCode", If(ConfigurationManager.AppSettings("CompCode"), "").Trim))
+
+        Dim lots As Dictionary(Of Decimal, DataRow) = dtLots.Rows.Cast(Of DataRow).ToDictionary(Function(row) CDec(row("lotRecID")))
+
+        'The price of the items in the location, read at once (one lookup per lot takes minutes with V_CPP_LabelItemPrices)
+        Dim prices As New Dictionary(Of Decimal, Decimal)
+        If dtLots.Rows.Count > 0 Then
+            For Each row As DataRow In RORead(cnsql, trnsql, $" SELECT itemRecID , MAX(priceLC) [priceLC] FROM V_CPP_LabelItemPrices
+                                                                WHERE  locationCode = @Location AND companyCode = @CompCode
+                                                                       AND itemRecID IN ( {String.Join(",", dtLots.Rows.Cast(Of DataRow).Select(Function(lot) CDec(lot("itemRecID")).ToString("0", invariant)).Distinct)} )
+                                                                GROUP BY itemRecID ",
+                                              ROParam("@Location", location), ROParam("@CompCode", If(ConfigurationManager.AppSettings("CompCode"), "").Trim)).Rows
+                If Not IsDBNull(row("priceLC")) Then prices(CDec(row("itemRecID"))) = Math.Round(CDec(row("priceLC")), 0)
+            Next
+        End If
+        Dim priceOf = Function(lot As DataRow) As Decimal
+                          Dim price As Decimal = 0
+                          prices.TryGetValue(CDec(lot("itemRecID")), price)
+                          Return price
+                      End Function
+
+        'Not found : the lot is not in the location any more or its item cannot be transferred (halted, not active...)
+        For Each lotRecID As Decimal In lotQtys.Keys
+            If Not lots.ContainsKey(lotRecID) Then Return "Error Item Not Found Or Not Active"
+            If lots(lotRecID)("itemFourthParty").ToString = "Y" Then Return "Error You Can’t Transact a Forth Party Item"
+        Next
+
+        'The available qty (btnConfirm of frmTransferStock) : a service item is not checked
+        Dim itemsWithNoAvlQty As String = ""
+        For Each lotRecID As Decimal In lotQtys.Keys
+            Dim lot As DataRow = lots(lotRecID)
+            If lot("itemService").ToString.ToUpper = "S" Then Continue For
+            If CDec(lot("lotLeft")) - lotQtys(lotRecID) < 0 Then itemsWithNoAvlQty &= "- " & lot("itemDescription").ToString & " : " & vbCrLf
+        Next
+        If itemsWithNoAvlQty <> "" Then Return "Error Exist Items With No Available Quantity :" & vbCrLf & itemsWithNoAvlQty
+
+        Dim currencyLC As String = If(ROScalar(cnsql, trnsql, " SELECT TOP 1 currencyLC FROM V_CPP_LabelCurrencies WHERE companyCode = @CompCode ",
+                                               ROParam("@CompCode", If(ConfigurationManager.AppSettings("CompCode"), "").Trim)), "").ToString
+
+        Dim cut = Function(text As Object, length As Integer) As Object
+                      Dim value As String = If(text, "").ToString.Trim
+                      Return If(value.Length > length, value.Substring(0, length), value)
+                  End Function
+
+        'One transfer per destination, the lines in the order of the device, inserted by blocks of rows (one command per block)
+        Const rowsPerInsert As Integer = 80
+        Dim transfers As New JArray
+        For Each destination As String In qtys.Keys.Select(Function(key) key.Split("|"c)(1)).Distinct.OrderBy(Function(code) code)
+
+            Dim transferID As String = save & "-" & destination
+            Dim keys As List(Of String) = qtys.Keys.Where(Function(lineKey) lineKey.Split("|"c)(1) = destination).ToList
+            Dim transferQty As Decimal = 0
+
+            For first As Integer = 0 To keys.Count - 1 Step rowsPerInsert
+
+                Dim values As New List(Of String)
+                Dim parameters As New List(Of SqlParameter) From {
+                    ROParam("@TransferID", transferID), ROParam("@Currency", cut(currencyLC, 50)), ROParam("@Location", location),
+                    ROParam("@Destination", destination), ROParam("@Machine", machine)
+                }
+
+                For index As Integer = first To Math.Min(first + rowsPerInsert, keys.Count) - 1
+
+                    Dim key As String = keys(index)
+                    Dim lot As DataRow = lots(CDec(key.Split("|"c)(0)))
+                    Dim n As String = index.ToString(invariant)
+                    transferQty += qtys(key)
+
+                    values.Add($" ( @TransferID , @RowNumber{n} , @ItemRecID{n} , @Reference{n} , @Description{n} , @SingleRef1{n} , @SingleRef2{n} , @Barcode{n} , @Brand{n} , @ProductGroup{n} ,
+                                    @Size{n} , @Color{n} , @Expiry{n} , @Lot{n} , @Available{n} , @Qty{n} , @ItemClass{n} , @Price{n} , @Currency ,
+                                    @Location , @Destination , @Machine , 'N' , 'N' , 'N' , GETDATE() ) ")
+                    parameters.AddRange({
+                        ROParam("@RowNumber" & n, (index + 1).ToString(invariant)),
+                        ROParam("@ItemRecID" & n, CDec(lot("itemRecID")).ToString("0", invariant)), ROParam("@Reference" & n, cut(lot("itemReference"), 50)),
+                        ROParam("@Description" & n, cut(lot("itemDescription"), 250)), ROParam("@SingleRef1" & n, cut(lot("itemSingleRef1"), 50)),
+                        ROParam("@SingleRef2" & n, cut(lot("itemSingleRef2"), 50)), ROParam("@Barcode" & n, cut(lot("itemBarcode"), 50)),
+                        ROParam("@Brand" & n, cut(lot("itemBrandName"), 50)), ROParam("@ProductGroup" & n, cut(lot("itemProductGroupDesc"), 50)),
+                        ROParam("@Size" & n, lot("lotSize").ToString), ROParam("@Color" & n, lot("lotColor").ToString),
+                        ROParam("@Expiry" & n, lot("lotExpiryDt").ToString), ROParam("@Lot" & n, lot("lotBatch").ToString),
+                        ROParam("@Available" & n, CDec(lot("lotLeft")).ToString("0.###", invariant)), ROParam("@Qty" & n, qtys(key).ToString("0.###", invariant)),
+                        ROParam("@ItemClass" & n, lot("itemClass").ToString), ROParam("@Price" & n, priceOf(lot).ToString("0.###", invariant))
+                    })
+
+                Next
+
+                ROExecute(cnsql, trnsql, " INSERT INTO dbo._TRANSFER_tbl_upload_details
+                                                  ( [_id] , RowNumber , STK_RECID , STK_REF , STK_DESC , STK_SingleRef1 , STK_SingleRef2 , dbar_barcode , br_Name , IT_DESC ,
+                                                    Size , Color , Expiry_Dt , Lot_Nbr , Available_Qty , TransferQty , STK_ItmClass , DisplayPrice , PriceCurr ,
+                                                    FromLoc , ToLoc , Machine , ParseError , Uploaded , UploadError , dtstmp )
+                                           VALUES " & String.Join(",", values), parameters.ToArray)
+
+            Next
+
+            Dim saved As New JObject
+            saved("transferID") = transferID
+            saved("destination") = destination
+            saved("lines") = keys.Count
+            saved("qty") = transferQty
+            transfers.Add(saved)
+
+        Next
+
+        Dim result As New JObject
+        result("alreadySaved") = False
+        result("transfers") = transfers
+        Return result.ToString(Newtonsoft.Json.Formatting.None)
 
     End Function
 
-    'The lots of the location with an available qty, afterRecID : "" for the first page, else the last lotRecID stored
-    'Returns [{lotRecID, itemRecID, lotExpiry, lotBatch, lotColor, lotGrid, lotSize, lotAvailable}, ...], "" after the last page
-    Public Function GetTransferLots(location As String, afterRecID As String, pageSize As Integer) As String Implements IDataService.GetTransferLots
+    'Saves work on the location of the server only (LocCode of the Web.config)
+    Private Function TransferServerLocationCheck(location As String) As String
 
-        Try
+        Dim errorMessage As String = TransferLocationCheck(location)
+        If errorMessage <> "" Then Return errorMessage
+        If location.Trim.ToUpper <> If(LocCode, "").Trim.ToUpper Then Return $"The location of the server is {LocCode}, open the transfer settings and save them"
 
-            Dim errorMessage As String = TransferLocationCheck(location)
-            If errorMessage <> "" Then Return "Error " & errorMessage
-
-            Dim after As Decimal
-            errorMessage = ReceivingPageCheck(afterRecID, pageSize, after)
-            If errorMessage <> "" Then Return "Error " & errorMessage
-
-            Return TransferPage($" SELECT TOP {pageSize} CONVERT(VARCHAR(18), lotRecID) lotRecID ,
-                                                      CONVERT(VARCHAR(18), itemRecID) itemRecID ,
-                                                      lotExpiry ,
-                                                      lotBatch ,
-                                                      lotColor ,
-                                                      lotGrid ,
-                                                      lotSize ,
-                                                      lotAvailable
-                                    FROM     V_CPP_TransferStock
-                                    WHERE    locationCode = @Location
-                                             AND lotAvailable > 0
-                                             AND lotRecID > @After
-                                    ORDER BY lotRecID ", after, location)
-
-        Catch ex As Exception
-            Return "Error " & ex.Message
-        End Try
-
-    End Function
-
-    'The barcodes of the active items (the same view as Free Receiving), afterRecID : "" for the first page, else the last codeRecID stored
-    'Returns [{codeRecID, itemRecID, codeValue}, ...], "" after the last page
-    Public Function GetTransferBarcodes(afterRecID As String, pageSize As Integer) As String Implements IDataService.GetTransferBarcodes
-
-        Try
-
-            Dim after As Decimal
-            Dim errorMessage As String = ReceivingPageCheck(afterRecID, pageSize, after)
-            If errorMessage <> "" Then Return "Error " & errorMessage
-
-            Return TransferPage($" SELECT TOP {pageSize} CONVERT(VARCHAR(18), codeRecID) codeRecID ,
-                                                      CONVERT(VARCHAR(18), itemRecID) itemRecID ,
-                                                      codeValue
-                                    FROM     V_CPP_ReceivingItemCodes
-                                    WHERE    codeKind = 'barcode'
-                                             AND codeRecID > @After
-                                    ORDER BY codeRecID ", after, "")
-
-        Catch ex As Exception
-            Return "Error " & ex.Message
-        End Try
+        Return ""
 
     End Function
 
@@ -6777,7 +7043,8 @@ Public Class DataService
 
             cnsql.Open()
 
-            Using cmsql As New SqlCommand(sql, cnsql)
+            'Read uncommitted like the ERP : a transaction open in the ERP does not stop the download
+            Using cmsql As New SqlCommand(" SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; " & sql, cnsql)
 
                 cmsql.CommandTimeout = 600
                 cmsql.Parameters.Add("@After", SqlDbType.Decimal).Value = after
@@ -7610,7 +7877,7 @@ Public Class DataService
 
             Dim settings As ROSettings = ROGetSettings(cnsql, Nothing)
 
-            Dim sql As String = $" SELECT TOP 500 I.itemRecID , I.itemReference , I.itemBarcode , I.itemDescription , I.itemVatType , 0 [itemVatPerc] ,
+            Dim sql As String = $" SELECT TOP 5000 I.itemRecID , I.itemReference , I.itemBarcode , I.itemDescription , I.itemVatType , 0 [itemVatPerc] ,
                                           I.itemProductGroup , I.itemUnit , CONVERT(NUMERIC(18, 3), I.itemCostCC) [itemPrice] , @CurrencyCC [itemCurrency] ,
                                           ISNULL(( SELECT SUM(ISNULL(Q.stockAvailable, 0)) FROM V_CPP_StockQty Q WHERE Q.itemRecID = I.itemRecID ), 0) [itemAvailableQty] ,
                                           '' [itemPromotionCriteria] ,
@@ -8106,7 +8373,7 @@ Public Class DataService
                                                                            ISNULL(I.itemReference, '') [itemReference] , ISNULL(I.itemDescription, '') [itemDescription] ,
                                                                            ISNULL(I.itemClass, CASE WHEN EXISTS ( SELECT TOP 1 1 FROM V_CPP_ROLineLots Q WHERE Q.lineRecID = D.lineRecID ) THEN 'E' ELSE 'T' END) [itemClass] ,
                                                                            ISNULL(I.itemUnit, '') [itemUnit] , ISNULL(I.itemBarcode, '') [itemBarcode] ,
-                                                                           ISNULL(I.itemMeasType, 'P') [itemMeasType] , ISNULL(I.itemConsFactor, 1) [itemConsFactor]
+                                                                           ISNULL(I.itemMeasType, 'P') [itemMeasType] , ISNULL(I.itemConsFactor, 1) [itemConsFactor] , ISNULL(I.itemSubUnit, '') [itemSubUnit]
                                                                    FROM    V_CPP_ROLines D
                                                                            LEFT JOIN V_CPP_ROItems I ON I.itemRecID = D.itemRecID
                                                                    WHERE   D.roRecID = @RORecID
@@ -8153,6 +8420,7 @@ Public Class DataService
                         {"itemBarcode", row("itemBarcode").ToString},
                         {"itemMeasType", row("itemMeasType").ToString.Trim.ToUpper},
                         {"itemConsFactor", CDec(row("itemConsFactor"))},
+                        {"itemSubUnit", row("itemSubUnit").ToString},
                         {"supplierRef", row("supplierRef").ToString},
                         {"lineStatus", row("lineStatus").ToString.Trim.ToUpper},
                         {"qty", CDec(row("lineQty"))},

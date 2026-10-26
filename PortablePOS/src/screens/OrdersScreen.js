@@ -6,7 +6,7 @@ import CommonData from '../data/CommonData';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
-import { View, Text, ScrollView, Image, StyleSheet, Button, TouchableOpacity, FlatList, Modal, TextInput, PermissionsAndroid, Alert } from 'react-native';
+import { View, Text, ScrollView, Image, StyleSheet, Button, TouchableOpacity, FlatList, Modal, TextInput, PermissionsAndroid } from 'react-native';
 import TransactionHeader from '../components/TransactionHeader';
 import ClientSearchBox from '../components/searchBoxes/ClientSearchBox';
 import StockItemSearchBox from '../components/searchBoxes/StockItemSearchBox';
@@ -20,6 +20,7 @@ import PromotionData from '../data/PromotionData';
 import Printing from '../components/printing/Printing';
 import { getCurrentDate, getLoginUserCodeName } from '../variables/LoginInfo';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import MessageBox from '../components/MessageBox';
 
 const OrdersScreen = ({route, naviagation}) => {
 
@@ -93,7 +94,7 @@ const OrdersScreen = ({route, naviagation}) => {
         e.preventDefault();
 
         // Show confirmation alert
-        Alert.alert(
+        MessageBox.alert(
           'Discard changes?',
           'You have unsaved changes. Are you sure you want to discard them and leave the screen?',
           [

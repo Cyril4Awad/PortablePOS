@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Modal, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Modal, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import DialogInput from 'react-native-dialog-input';
 import Colors from '../variables/Colors';
@@ -13,6 +13,8 @@ import PhysicalCountData from '../data/PhysicalCountData';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
 import PhysicalCountSettings from '../configuration/PhysicalCountSettings';
 import { ToMilli, FormatForUpload, CheckCountNumber, FormatQuantity } from '../variables/PhysicalCountRules';
+import MessageBox from '../components/MessageBox';
+import { MachineNameMessage } from '../configuration/MachineName';
 
 // Time taken by a download or an upload : "Worked for 12.4 (s)"
 const WorkedFor = (startTime) => `Worked for ${((Date.now() - startTime) / 1000).toFixed(1)} (s)`;
@@ -31,25 +33,24 @@ const PhysicalCountScreen = props => {
   const [progress, setProgress] = useState(null);
   const cancelRequested = useRef(false);
 
-  // Returns what was loaded ({ profile, machineName, summary }), null on error
+  // Returns what was loaded ({ profile, machineName, header, summary }), null on error
   const LoadStatus = async () => {
     try {
       const selectedProfile = await PhysicalCountDatabase.GetSelectedProfile();
       const loadedMachineName = await PhysicalCountSettings.machineName();
       let loadedSummary = { notCounted: 0, pending: 0, uploaded: 0, countedQty: 0 };
+      let loadedHeader = null;
       setProfile(selectedProfile);
       setMachineName(loadedMachineName);
 
       if (selectedProfile) {
-        setHeader(await PhysicalCountDatabase.GetHeader(selectedProfile));
+        loadedHeader = await PhysicalCountDatabase.GetHeader(selectedProfile);
         loadedSummary = await PhysicalCountDatabase.GetLinesSummary(selectedProfile);
       }
-      else {
-        setHeader(null);
-      }
+      setHeader(loadedHeader);
       setSummary(loadedSummary);
 
-      return { profile: selectedProfile, machineName: loadedMachineName, summary: loadedSummary };
+      return { profile: selectedProfile, machineName: loadedMachineName, header: loadedHeader, summary: loadedSummary };
     } catch (error) {
       alert(error.message);
       return null;
@@ -86,10 +87,10 @@ const PhysicalCountScreen = props => {
       alert('Please select a location in the physical count settings');
     }
     else if (machineName === '') {
-      alert('Please fill the machine name in the physical count settings');
+      alert(MachineNameMessage());
     }
     else if (header !== null && header.complete === 0) {
-      Alert.alert('Download Not Completed', `The download of physical count ${header.countNumber} did not finish.`, [
+      MessageBox.alert('Download Not Completed', `The download of physical count # ${header.countNumber} did not finish.`, [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Restart Download', onPress: () => AskNewCount() },
         { text: 'Continue Download', onPress: () => RunDownload(null) },
@@ -101,11 +102,15 @@ const PhysicalCountScreen = props => {
 
   };
 
+  // "Count # 82, still not uploaded ..." : the counted items of the count on the device would be lost by a new download
+  const NotUploadedText = (deviceHeader, deviceSummary) =>
+    `Count # ${deviceHeader?.countNumber ?? ''}, still not uploaded (${deviceSummary.pending} counted items total including expiries). Do you want to download anyway ? The counted quantities will be discarded.`;
+
   // Counted lines that are not uploaded would be lost by a new download
   const AskNewCount = () => {
 
     if (summary.pending > 0) {
-      Alert.alert('Lines Not Uploaded', `${summary.pending} counted lines on this device are not uploaded. Downloading will discard them.`, [
+      MessageBox.alert('Count Not Uploaded', NotUploadedText(header, summary), [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Download Anyway', style: 'destructive', onPress: () => setCountNumberDialogVisible(true) },
         { text: 'Upload First', onPress: () => BeforeUpload() },
@@ -121,7 +126,7 @@ const PhysicalCountScreen = props => {
   // status : what LoadStatus loaded (the state is not updated yet when this runs)
   const OfferNewCountDownload = (countNumber, status) => {
 
-    Alert.alert('Physical Count Created', `Physical count ${countNumber} was created for machine ${status.machineName}. Do you want to download it now ?`, [
+    MessageBox.alert('Physical Count Created', `Physical count # ${countNumber} was created for machine ${status.machineName}. Do you want to download it now ?`, [
       { text: 'Later', style: 'cancel' },
       { text: 'Download', onPress: () => DownloadCount(countNumber, status) },
     ]);
@@ -135,7 +140,7 @@ const PhysicalCountScreen = props => {
     const download = () => RunDownload(countNumber, status.profile, status.machineName);
 
     if (status.summary.pending > 0) {
-      Alert.alert('Lines Not Uploaded', `${status.summary.pending} counted lines on this device are not uploaded. Downloading will discard them. Upload them first, then download count ${countNumber}.`, [
+      MessageBox.alert('Count Not Uploaded', NotUploadedText(status.header, status.summary), [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Download Anyway', style: 'destructive', onPress: download },
       ]);
@@ -212,7 +217,7 @@ const PhysicalCountScreen = props => {
       await PhysicalCountDatabase.CompleteDownload(countKey);
 
       setProgress(null);
-      alert(`Download Completed - ${localHeader.linesCount} Line(s)\n${WorkedFor(startTime)}`);
+      alert(`Download Completed - Count # ${localHeader.countNumber}\n${localHeader.linesCount} items total including expiries\n${WorkedFor(startTime)}`);
 
     } catch (error) {
       setProgress(null);
@@ -236,7 +241,7 @@ const PhysicalCountScreen = props => {
       alert('No Counted Items Found');
     }
     else {
-      Alert.alert('Upload', `This Physical Count Contains ${summary.pending} Items. Do You Want To Upload ?`, [
+      MessageBox.alert('Upload', `Count # ${header.countNumber} contains ${summary.pending} counted items total including expiries. Do you want to upload ?`, [
         { text: 'No', style: 'cancel' },
         { text: 'Yes', onPress: () => RunUpload() },
       ]);
@@ -256,7 +261,7 @@ const PhysicalCountScreen = props => {
 
       const pendingLines = await PhysicalCountDatabase.GetPendingLines(header);
 
-      setProgress({ title: 'Upload', detail: `Sending ${pendingLines.length} Lines`, percent: 0.5, cancellable: false });
+      setProgress({ title: 'Upload', detail: `Sending ${pendingLines.length} Items`, percent: 0.5, cancellable: false });
 
       await PhysicalCountData.SavePhysicalCountLines(header.server, header.location, header.countNumber, header.machineName,
         pendingLines.map(line => ({ lineRecID: line.lineRecID, counted: FormatForUpload(line.counted) })));
@@ -264,7 +269,7 @@ const PhysicalCountScreen = props => {
       await PhysicalCountDatabase.MarkLinesUploaded(header, pendingLines.map(line => line.lineRecID));
 
       setProgress(null);
-      alert(`Sending Finished - ${pendingLines.length} Line(s)\n${WorkedFor(startTime)}`);
+      alert(`Sending Finished - Count # ${header.countNumber}\n${pendingLines.length} items total including expiries\n${WorkedFor(startTime)}`);
 
     } catch (error) {
       setProgress(null);
@@ -347,19 +352,24 @@ const PhysicalCountScreen = props => {
 
         <View style={choiceRowStyle.row}>
           <View style={styles.fieldHalf}>
-            <DataField title='Server' data={profile ? profile.server : '-'} />
+            <ChoiceField
+              title='Server'
+              value={profile ? profile.server : '-'}
+              onPress={() => props.navigation.navigate('PhysicalCountSettings')}
+              style={{ borderBottomWidth: 0 }}
+            />
           </View>
           <View style={styles.fieldHalf}>
             <ChoiceField
               title='Machine'
-              value={machineName === '' ? 'Not Defined' : machineName}
+              value={machineName === '' ? 'Not Valid' : machineName}
               onPress={() => props.navigation.navigate('PhysicalCountSettings')}
               style={{ borderRightWidth: 0, borderBottomWidth: 0 }}
             />
           </View>
         </View>
 
-        <DataField title='Physical Count' data={header ? `${header.countNumber}  ( ${header.warehouse} - ${header.dateCount} )` : 'Not Downloaded'} toolTip={header && header.complete === 0 ? 'Download Not Completed' : ''} />
+        <DataField title='Physical Count' data={header ? `# ${header.countNumber}  ( ${header.warehouse} - ${header.dateCount} )` : 'Not Downloaded'} toolTip={header && header.complete === 0 ? 'Download Not Completed' : ''} />
 
         {/* Lines : not counted | counted, the upload state is a note of the counted lines (not uploaded lines are counted lines) */}
         <View style={styles.linesRow}>
@@ -388,16 +398,8 @@ const PhysicalCountScreen = props => {
 
           <MainButton title='Upload' imageSource={require('../assets/icons/upload.png')} onPress={() => BeforeUpload()} />
 
-          <MainButton title='Scan Items' imageSource={require('../assets/icons/scanItems.png')} onPress={() => {
-            if (countReady) {
-              props.navigation.navigate('PhysicalCountScan', { server: header.server, location: header.location });
-            }
-            else {
-              alert('Please download the physical count first');
-            }
-          }} />
-
-          <MainButton title='Scan For Testing' imageSource={require('../assets/icons/scanItems.png')} onPress={() => {
+          {/* The scan screen of the count (the former Scan For Testing), the older PhysicalCountScan screen is not shown */}
+          <MainButton title='Scan Items/QR' imageSource={require('../assets/icons/scanItems.png')} secondImageSource={require('../assets/icons/qr.png')} onPress={() => {
             if (countReady) {
               props.navigation.navigate('PhysicalCountScanTesting', { server: header.server, location: header.location });
             }
@@ -414,8 +416,6 @@ const PhysicalCountScreen = props => {
               alert('Please download the physical count first');
             }
           }} />
-
-          <MainButton title='Settings' imageSource={require('../assets/icons/settings.png')} onPress={() => props.navigation.navigate('PhysicalCountSettings')} />
 
         </View>
 

@@ -20,10 +20,17 @@ import QRCodeScanner from 'react-native-qrcode-scanner';
 import { RNCamera } from 'react-native-camera';
 
 import Promotions from '../promotions/Promotions';
+import SwitchSelector from 'react-native-switch-selector';
 
 // searchFor = 'RO' (optional) : the product groups and items of the Receiving Order, supplierRecID : its supplier
 // onSelectItem(itemRecID, itemReference, itemDescription, itemPrice) (optional) : called with the item picked
+// itemsSwitch (optional) : a Product Groups / Items switch, Items lists all the items at once (searched as you type, no product group first)
+// initialItemsMode, onItemsModeChange(itemsMode) (optional) : the side of the switch shown first, and when it changes
 const ItemProductGroups = props => {
+
+  const [itemsMode, setItemsMode] = useState(!!props.itemsSwitch && !!props.initialItemsMode);
+  // The text searched in the items of a product group (always '')
+  const [itemsSearchString, setItemsSearchString] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -109,7 +116,7 @@ const ItemProductGroups = props => {
           title={selectedItemProductGroupDesc}
           itemProductGroupCode={selectedItemProductGroupCode}
           itemPromotionCriteria=''
-          searchString=''
+          searchString={itemsSearchString}
           setSelectedItemRecID={props.setSelectedItemRecID}
           selectedItemQty={props.selectedItemQty}
           setSelectedItemQty={props.setSelectedItemQty}
@@ -134,6 +141,7 @@ const ItemProductGroups = props => {
         itemProductGroupCode={itemProductGroupData.item.itemProductGroupCode} 
         itemProductGroupDesc={itemProductGroupData.item.itemProductGroupDesc}
         onPress={() => {
+          setItemsSearchString('');
           setSelectedItemProductGroupCode(itemProductGroupData.item.itemProductGroupCode);
           setSelectedItemProductGroupDesc(itemProductGroupData.item.itemProductGroupDesc);
           setModalVisible(true);
@@ -218,7 +226,45 @@ const ItemProductGroups = props => {
             </Modal>
 {/* end */}
 
-      <View style={styles.searchContainer}>
+      {props.itemsSwitch ?
+        <View style={styles.switchContainer}>
+          <SwitchSelector
+            initial={itemsMode ? 1 : 0}
+            onPress={value => {
+              setItemsMode(value === 1);
+              if (props.onItemsModeChange) props.onItemsModeChange(value === 1);
+            }}
+            textColor={Colors.brandBlue}
+            selectedColor='white'
+            buttonColor={Colors.brandBlue}
+            borderColor={Colors.brandBlue}
+            hasPadding={true}
+            options={[
+              { label: 'Product Groups', value: 0 },
+              { label: 'Items', value: 1 }
+            ]}
+          />
+        </View> :
+        <></>}
+
+      {itemsMode ?
+        // Items : all the items are listed at once, the search box narrows them (reference, barcode, description)
+        <View style={styles.itemsModeContainer}>
+          <Items
+            embedded={true}
+            title=''
+            itemProductGroupCode=''
+            itemPromotionCriteria=''
+            searchString=''
+            setStockScreenVisible={props.setStockScreenVisible}
+            onSelectItem={props.onSelectItem}
+            searchFor={props.searchFor}
+            supplierRecID={props.supplierRecID}
+          />
+        </View> :
+        <></>}
+
+      <View style={[styles.searchContainer, itemsMode ? { display: 'none' } : null]}>
 
         <View style={styles.barcodeScanButtonContainer}>
           {/* <TouchableOpacity style={styles.barcodeScanButton} onPress={() => setBarcodeScannerOpened(true)} disabled={true}>
@@ -250,25 +296,29 @@ const ItemProductGroups = props => {
           />
       </View>
 
-      <FlatList
-        keyExtractor={(item, index) => item.itemProductGroupCode.toString()}
-        data={itemProductGroupsDataFiltered}
-        renderItem={ItemProductGroupItem}
-        numColumns={Sizing.isTablet ? 4 : 1}
-        style={{ width: '100%' , backgroundColor: Colors.bgColor }}
-        contentContainerStyle={{ alignItems: 'center', justifyContent: 'center' }}
-        refreshing={false}
-        onRefresh={() => {
-          StockData.GetItemProductGroups(
-            { setItemProductGroupsData },
-            { setItemProductGroupsDataFiltered },
-            { setIsLoading },
-            { setError },
-            { searchFor: props.searchFor }
-          );
-          setSearchString('');}
-        }
-      />
+      {/* not rendered on the Items side : hidden, its pull-to-refresh wrapper still took half the height */}
+      {!itemsMode ?
+        <FlatList
+          keyExtractor={(item, index) => item.itemProductGroupCode.toString()}
+          data={itemProductGroupsDataFiltered}
+          renderItem={ItemProductGroupItem}
+          numColumns={Sizing.isTablet ? 4 : 1}
+          style={{ width: '100%' , backgroundColor: Colors.bgColor }}
+          contentContainerStyle={{ alignItems: 'center', justifyContent: 'center' }}
+          refreshing={false}
+          onRefresh={() => {
+            StockData.GetItemProductGroups(
+              { setItemProductGroupsData },
+              { setItemProductGroupsDataFiltered },
+              { setIsLoading },
+              { setError },
+              { searchFor: props.searchFor }
+            );
+            setSearchString('');}
+          }
+        />
+        :
+        <></>}
 
       <View style={styles.promotionSectionContainer}>
         <TouchableOpacity onPress={() => setPromotionModalVisible(true)}>
@@ -335,6 +385,22 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     resizeMode: 'contain',
     //backgroundColor: 'red',
+  },
+  switchContainer: {
+    width: '100%',
+    paddingHorizontal: 5,
+    paddingTop: 5,
+  },
+  itemsModeContainer: {
+    flex: 1,
+    width: '100%',
+  },
+  itemsModeHintText: {
+    color: 'gray',
+    fontSize: FontSize(14),
+    fontStyle: 'italic',
+    textAlign: 'center',
+    padding: 15,
   },
   searchTitleContainer: {
     width: '55%',

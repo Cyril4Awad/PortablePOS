@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, FlatList, ScrollView, Image, Modal, Keyboard, Vibration, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, FlatList, ScrollView, Image, Modal, Keyboard, Vibration } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
@@ -11,15 +12,22 @@ import ModalTitle from '../components/ModalTitle';
 import ROSupplierPicker from '../components/lists/receivingOrder/ROSupplierPicker';
 import ROChoiceModal from '../components/lists/receivingOrder/ROChoiceModal';
 import RODateModal from '../components/lists/receivingOrder/RODateModal';
-import { ConfirmAndSave, SavingModal, DraftMeasTotals } from '../components/lists/receivingOrder/ROSave';
+import { ConfirmAndSave, SavingModal, MeasTotalsTable, LineConsQty } from '../components/lists/receivingOrder/ROSave';
 import ReceivingOrderData from '../data/ReceivingOrderData';
 import { useReceivingOrderDraft, UpdateDraft, ClearDraft, SetLines, NextID } from '../variables/ReceivingOrderDraft';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
 import { MODE_TITLES, STATUS_LABELS, FormatISODate, FormatQty, Plural, LineQty, LineIssue, LineBarcodes, isLotItem, VatLabel, FormatCost, LineCost, TodayISO } from '../variables/ReceivingOrderRules';
+import MessageBox from '../components/MessageBox';
+
+// The stock search shows the product groups or searches the items directly : the last side used is kept
+const searchModeStorageKey = '@app_roSearchItemsMode';
+let searchItemsMode = false;
+AsyncStorage.getItem(searchModeStorageKey).then(value => { searchItemsMode = value === 'Y'; }).catch(() => { });
 
 const STATUS_COLORS = { N: Colors.brandGreen, F: Colors.brandBlue, R: 'rgb(200, 60, 60)' };
 
-const READY_TEXT = 'Scan or type a reference / barcode';
+// Nothing to tell : the bar is hidden (the placeholder of the scan already says what to do)
+const READY_TEXT = '';
 
 // The receiving order on one screen : the header (supplier, location, RO ref, dates, purchase order) folds away,
 // under it the items : scan or type a reference, a barcode or a supplier reference (Enter), the stock search (Search)
@@ -141,12 +149,12 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         const field = dateField;
         setDateField(null);
         if (field === 'roDate') {
-            if (date > TodayISO()) { Alert.alert('RO Date', "The RO date should be equal or less than today's date"); return; }
+            if (date > TodayISO()) { MessageBox.alert('RO Date', "The RO date should be equal or less than today's date"); return; }
             UpdateDraft(current => ({ roDate: date, roActualDate: current.roActualDate < date ? date : current.roActualDate }));
             return;
         }
         if (date < draft.roDate) {
-            Alert.alert('Actual Date', `The actual date should be greater or equal than the RO date (${FormatISODate(draft.roDate)})`);
+            MessageBox.alert('Actual Date', `The actual date should be greater or equal than the RO date (${FormatISODate(draft.roDate)})`);
             return;
         }
         UpdateDraft({ roActualDate: date });
@@ -198,6 +206,9 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                         itemVatType: line.itemVatType,
                         itemCostCC: line.itemCostCC,
                         itemCurrency: line.itemCurrency,
+                        itemSubUnit: line.itemSubUnit,
+                        itemMeasType: line.itemMeasType,
+                        itemConsFactor: line.itemConsFactor,
                         unitCost: line.unitCost,
                         isPending: line.isPending === 1,
                         supplierRef: line.supplierRef,
@@ -215,10 +226,12 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                     ReadyStatus();
                     setHeaderOpen(false);
                     const notes = [];
-                    if (imported.some(line => isLotItem(line.itemClass))) notes.push('Type the expiry dates and lots of the expiry items.');
-                    if (blocked.length > 0) notes.push(`${Plural(blocked.length, 'line')} cannot be received (${blocked[0].itemReference} : ${blocked[0].blockMessage}).`);
-                    if (result.skipped > 0) notes.push(`${Plural(result.skipped, 'line')} left out (items you have no privilege for).`);
-                    Alert.alert(`PO #${po.poRecID}`, `${Plural(imported.length, 'line')} imported with the qty still to receive.${notes.length > 0 ? '\n\n' + notes.join('\n') : ''}`);
+                    // What was imported, then why some lines of the PO are not in the receiving order
+                    const lotLines = imported.filter(line => isLotItem(line.itemClass)).length;
+                    if (lotLines > 0) notes.push(`• ${Plural(lotLines, 'expiry item')} : open ${lotLines === 1 ? 'it' : 'each one'} to type the expiry date and lot, the qty is 0 until then.`);
+                    if (blocked.length > 0) notes.push(`• ${Plural(blocked.length, 'line')} not imported, the item cannot be received today :\n${blocked.map(line => `   ${line.itemReference} : ${line.blockMessage}`).join('\n')}`);
+                    if (result.skipped > 0) notes.push(`• ${Plural(result.skipped, 'line')} not imported : the item is of a brand or item tag you are not allowed to purchase (your purchase privileges). Someone with the privilege must receive ${result.skipped === 1 ? 'it' : 'them'}.`);
+                    MessageBox.alert(`PO #${po.poRecID}`, `${Plural(imported.length, 'line')} imported with the qty still to receive.${notes.length > 0 ? '\n\n' + notes.join('\n\n') : ''}`);
                 })
                 .catch(err => ShowError(err.message))
                 .finally(() => setSearching(false));
@@ -226,7 +239,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
 
         const fromPO = draft.lines.filter(line => line.poQty !== undefined).length;
         if (fromPO > 0) {
-            Alert.alert('Change The PO', `The ${Plural(fromPO, 'line')} of PO #${draft.po?.poRecID} will be replaced by the lines of PO #${po.poRecID}.`, [
+            MessageBox.alert('Change The PO', `The ${Plural(fromPO, 'line')} of PO #${draft.po?.poRecID} will be replaced by the lines of PO #${po.poRecID}.`, [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Replace', onPress: run },
             ]);
@@ -237,7 +250,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
     const RemovePurchaseOrder = () => {
         if (!draft.po) return;
         const fromPO = draft.lines.filter(line => line.poQty !== undefined).length;
-        Alert.alert('Remove The PO', `PO #${draft.po.poRecID} and its ${Plural(fromPO, 'line')} will be removed from the receiving order.`, [
+        MessageBox.alert('Remove The PO', `PO #${draft.po.poRecID} and its ${Plural(fromPO, 'line')} will be removed from the receiving order.`, [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Remove', style: 'destructive', onPress: () => UpdateDraft(current => ({ po: null, lines: current.lines.filter(line => line.poQty === undefined) })) },
         ]);
@@ -314,7 +327,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
 
     const NotFound = (code) => {
         ShowError(`No item found for ${code}`);
-        Alert.alert('Item Not Found', `No item of the receiving order is found for "${code}".`, [{ text: 'OK', onPress: focusScan }]);
+        MessageBox.alert('Item Not Found', `No item of the receiving order is found for "${code}".`, [{ text: 'OK', onPress: focusScan }]);
     };
 
     const HandleScan = () => {
@@ -348,7 +361,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
             .then(items => {
                 if (items.length === 0) {
                     ReadyStatus();
-                    Alert.alert('Pending Stock Items', 'There is no pending stock item to receive.', [{ text: 'OK', onPress: focusScan }]);
+                    MessageBox.alert('Pending Stock Items', 'There is no pending stock item to receive.', [{ text: 'OK', onPress: focusScan }]);
                     return;
                 }
                 setStatus({ text: `${Plural(items.length, 'pending item')}, choose one`, isError: false });
@@ -361,14 +374,14 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
     //#endregion
 
     const RemoveLine = (line) => {
-        Alert.alert('Remove Line', `Do you want to remove ${line.itemReference} (${STATUS_LABELS[line.lineStatus]} ${FormatQty(LineQty(line))}) ?`, [
+        MessageBox.alert('Remove Line', `Do you want to remove ${line.itemReference} (${STATUS_LABELS[line.lineStatus]} ${FormatQty(LineQty(line))}) ?`, [
             { text: 'No', style: 'cancel' },
             { text: 'Remove', style: 'destructive', onPress: () => SetLines(rows => rows.filter(row => row.lineID !== line.lineID)) },
         ]);
     };
 
     const Clear = () => {
-        Alert.alert('Clear', `The ${MODE_TITLES[draft.mode].toLowerCase()} and its ${Plural(draft.lines.length, isModify ? 'new line' : 'line')} will be cleared.`, [
+        MessageBox.alert('Clear', `The ${MODE_TITLES[draft.mode].toLowerCase()} and its ${Plural(draft.lines.length, isModify ? 'new line' : 'line')} will be cleared.`, [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Clear', style: 'destructive', onPress: () => { ClearDraft(); navigation.navigate('ReceivingOrder'); } },
         ]);
@@ -400,6 +413,10 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                 <View style={styles.lineQtyContainer}>
                     <Text style={[styles.lineQtyText, { color: LineQty(line) > 0 ? 'black' : 'red' }]}>{FormatQty(LineQty(line))}</Text>
                     <Text style={styles.lineUnitText} numberOfLines={1}>{line.itemUnit}</Text>
+                    {/* the consumed qty (in the sub unit) when it is not the qty */}
+                    {LineConsQty(line) !== LineQty(line) ?
+                        <Text style={styles.lineConsText} numberOfLines={1}>Cons. {FormatQty(LineConsQty(line))}{line.itemSubUnit ? ` ${line.itemSubUnit}` : ''}</Text> :
+                        <></>}
                 </View>
                 {!line.saved ?
                     <TouchableOpacity style={styles.lineDeleteButton} onPress={() => RemoveLine(line)}>
@@ -422,7 +439,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                             <View style={styles.choiceTextContainer}>
                                 <Text style={styles.choiceTitleText}>Stock Search</Text>
                                 <Text style={styles.choiceDescriptionText}>
-                                    {scanText.trim().length >= 3 ? `Search "${scanText.trim()}" in the stock` : 'The items by product group or description'}
+                                    {scanText.trim().length >= 3 ? `Search "${scanText.trim()}" in the stock` : 'By product group, or the items directly (switch)'}
                                 </Text>
                             </View>
                         </TouchableOpacity>
@@ -535,6 +552,12 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
             <Modal visible={browseVisible} onRequestClose={() => { setBrowseVisible(false); ReadyStatus(); focusScan(); }}>
                 <ItemProductGroups
                     searchFor='RO'
+                    itemsSwitch={true}
+                    initialItemsMode={searchItemsMode}
+                    onItemsModeChange={itemsMode => {
+                        searchItemsMode = itemsMode;
+                        AsyncStorage.setItem(searchModeStorageKey, itemsMode ? 'Y' : 'N').catch(() => { });
+                    }}
                     supplierRecID={draft.supplier?.supplierRecID}
                     setStockScreenVisible={() => { setBrowseVisible(false); ReadyStatus(); }}
                     onSelectItem={PickFromSearch}
@@ -652,10 +675,12 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                 </View> :
                 <></>}
 
-            <TouchableOpacity style={[styles.statusContainer, { backgroundColor: status.isError ? 'red' : isCancel ? 'rgb(200, 60, 60)' : Colors.brandBlue }]}
-                onPress={() => { if (status.text !== readyText) Alert.alert(status.isError ? 'Error' : 'Receiving Order', status.text); }}>
-                <Text style={styles.statusText} numberOfLines={1}>{status.text}</Text>
-            </TouchableOpacity>
+            {status.text !== '' ?
+                <TouchableOpacity style={[styles.statusContainer, { backgroundColor: status.isError ? 'red' : isCancel ? 'rgb(200, 60, 60)' : Colors.brandBlue }]}
+                    onPress={() => { if (status.text !== readyText) MessageBox.alert(status.isError ? 'Error' : 'Receiving Order', status.text); }}>
+                    <Text style={styles.statusText} numberOfLines={1}>{status.text}</Text>
+                </TouchableOpacity> :
+                <></>}
 
             <FlatList
                 style={styles.list}
@@ -668,10 +693,14 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
 
             {/* Always at the bottom */}
             <View style={styles.bottomContainer}>
-                <Text style={styles.summaryText} numberOfLines={2}>
-                    {Plural(newLines.length, isModify ? 'New Line' : 'Line')}  ·  {DraftMeasTotals(newLines)}
-                    {missing > 0 ? <Text style={styles.summaryMissingText}>  ·  {missing} To Complete</Text> : <></>}
-                </Text>
+                {/* Lines | the totals box of FrmDO : consumed qty by measure, normal / free / return */}
+                <View style={styles.summaryRow}>
+                    <View style={styles.summaryLinesCell}>
+                        <Text style={styles.summaryText} numberOfLines={1}>{Plural(newLines.length, isModify ? 'New Line' : 'Line')}</Text>
+                        {missing > 0 ? <Text style={[styles.summaryText, styles.summaryMissingText]} numberOfLines={1}>{missing} To Complete</Text> : <></>}
+                    </View>
+                    <MeasTotalsTable lines={newLines} />
+                </View>
                 <View style={styles.actionsContainer}>
                     {isView ?
                         <MainButton title='Close' imageSource={require('../assets/icons/close.png')}
@@ -983,6 +1012,22 @@ const styles = StyleSheet.create({
         backgroundColor: Colors.bgColor,
         paddingHorizontal: 10,
         paddingTop: 6,
+    },
+    summaryRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    summaryLinesCell: {
+        width: '28%',
+        paddingRight: 4,
+        borderRightWidth: 1,
+        borderRightColor: 'silver',
+    },
+    lineConsText: {
+        color: Colors.brandGreen,
+        fontSize: FontSize(12),
+        fontWeight: 'bold',
     },
     summaryText: {
         color: Colors.brandBlue,

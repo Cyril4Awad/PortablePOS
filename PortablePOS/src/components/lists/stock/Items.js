@@ -15,6 +15,7 @@ import StockData from '../../../data/StockData';
 import { ItemRecIDFromLink } from '../../../variables/ItemLink';
 
 // searchFor = 'RO' (optional) : the items of the Receiving Order (FrmDO conditions), supplierRecID : its supplier
+// embedded (optional) : shown inside another list (the Items side of ItemProductGroups), without its title bar
 const Items = props => {
 
   const [isLoading, setIsLoading] = useState(false);
@@ -189,16 +190,18 @@ const Items = props => {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={props.embedded ? styles.embeddedContainer : styles.container}>
 
-      <ModalTitle
-        title={'Items List - ' + props.title}
-        onCloseButtonPress={props.onCloseButtonPress}
-        clearData={() => {
-          setItemsData([]);
-          setItemsDataFiltered([]);
-        }}
-      />
+      {!props.embedded ?
+        <ModalTitle
+          title={'Items List - ' + props.title}
+          onCloseButtonPress={props.onCloseButtonPress}
+          clearData={() => {
+            setItemsData([]);
+            setItemsDataFiltered([]);
+          }}
+        /> :
+        <></>}
 
       <ItemDetailsModal />
 
@@ -222,7 +225,7 @@ const Items = props => {
         data={itemsDataFiltered}
         renderItem={ItemItem}
         numColumns={1}
-        style={{ width: '100%' , backgroundColor: Colors.bgColor }}
+        style={[{ width: '100%' , backgroundColor: Colors.bgColor }, props.embedded ? { flex: 1 } : null]}
         contentContainerStyle={{ alignItems: 'center', justifyContent: 'center' }}
         refreshing={false}
         onRefresh={() => {
@@ -246,6 +249,11 @@ const Items = props => {
 };
 
 const styles = StyleSheet.create({
+  // inside the Items side of ItemProductGroups : the whole height left, the list from the top
+  embeddedContainer: {
+    flex: 1,
+    width: '100%',
+  },
   container: {
     //backgroundColor: Colors.bgColor,
     //backgroundColor: 'yellow',

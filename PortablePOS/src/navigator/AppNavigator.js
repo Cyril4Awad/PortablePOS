@@ -34,7 +34,6 @@ import FreeReceivingScanScreen from './../screens/FreeReceivingScanScreen';
 import FreeReceivingItemsScreen from './../screens/FreeReceivingItemsScreen';
 import FreeReceivingSettingsScreen from './../screens/FreeReceivingSettingsScreen';
 import TransferScanScreen from './../screens/TransferScanScreen';
-import TransferItemsScreen from './../screens/TransferItemsScreen';
 import TransferSettingsScreen from './../screens/TransferSettingsScreen';
 import ReceivingOrderScreen from './../screens/ReceivingOrderScreen';
 import ReceivingOrderListScreen from './../screens/ReceivingOrderListScreen';
@@ -134,7 +133,7 @@ const AppNavigator = (params) => {
                     name='PhysicalCountScanTesting'
                     component={PhysicalCountScanTestingScreen}
                     options={({ navigation }) => ({
-                        title: 'Physical Count - Scan For Testing',
+                        title: 'Physical Count - Scan Items',
                         ...BackArrowOptions(navigation),
                     })} />
 
@@ -277,14 +276,6 @@ const AppNavigator = (params) => {
                     component={TransferScanScreen}
                     options={({ navigation }) => ({
                         title: 'Transfer',
-                        ...BackArrowOptions(navigation),
-                    })} />
-
-                <Stack.Screen
-                    name='TransferItems'
-                    component={TransferItemsScreen}
-                    options={({ navigation }) => ({
-                        title: 'Transfer - Items',
                         ...BackArrowOptions(navigation),
                     })} />
 

@@ -1,10 +1,11 @@
 import React from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
 import { useReceivingOrderDraft, StartDraft, ClearDraft } from '../variables/ReceivingOrderDraft';
 import { MODE_TITLES, Plural } from '../variables/ReceivingOrderRules';
+import MessageBox from '../components/MessageBox';
 
 // A button like the main menu (icon, title, what it does), half of the width : the 5 fit without scrolling
 // compact : smaller tiles when there are 5 (Continue) so they all fit on the screen of the scanners
@@ -31,7 +32,7 @@ const ReceivingOrderScreen = props => {
             start();
             return;
         }
-        Alert.alert('Receiving Order Not Saved', `The ${MODE_TITLES[draft.mode].toLowerCase()} being prepared has ${Plural(draft.lines.length, 'new line')}.`, [
+        MessageBox.alert('Receiving Order Not Saved', `The ${MODE_TITLES[draft.mode].toLowerCase()} being prepared has ${Plural(draft.lines.length, 'new line')}.`, [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Continue It', onPress: () => props.navigation.navigate('ReceivingOrderEdit') },
             { text: 'Clear It', style: 'destructive', onPress: () => { ClearDraft(); start(); } },

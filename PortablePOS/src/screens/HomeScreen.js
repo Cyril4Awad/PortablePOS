@@ -44,7 +44,7 @@ const HomeScreen = params => {
                 name="Main"
                 component={MainScreen}
                 options={{
-                    title: 'Point Of Sales',
+                    title: 'Mobile Trading',
                 }} />
 
             <Drawer.Screen

@@ -13,6 +13,10 @@ import {
 import AppNavigator from './src/navigator/AppNavigator';
 import { useState, useEffect } from 'react';;
 import LoginScreen from './src/screens/LoginScreen';
+import MessageBox, { MessageBoxHost } from './src/components/MessageBox';
+
+// alert('...') shows the message box of the app instead of the Android alert
+global.alert = (message) => MessageBox.alert('Message', message);
 
 const App = () => {
 
@@ -37,6 +41,8 @@ const App = () => {
 
         <AppNavigator setIsLoggedIn={setIsLoggedIn}/>
 
+        <MessageBoxHost />
+
       </SafeAreaView>
 
     );
@@ -54,6 +60,8 @@ const App = () => {
         /> */}
 
         <LoginScreen setIsLoggedIn={setIsLoggedIn}/>
+
+        <MessageBoxHost />
 
       </SafeAreaView>
 

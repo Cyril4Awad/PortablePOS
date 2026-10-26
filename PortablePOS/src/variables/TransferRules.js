@@ -1,60 +1,11 @@
 import { ParseTypedQuantity, FormatQuantity, CodeDescription } from './PhysicalCountRules';
-import { ItemRecIDFromLink } from './ItemLink';
 
-// Transfer rules : search fields, lots, quantities (whole thousandths like the physical count : 12.5 => 12500)
+// Transfer rules : lots, quantities (whole thousandths like the physical count : 12.5 => 12500)
 
-export const DEFAULT_PAGE_SIZE = 5000;
-export const MAX_PAGE_SIZE = 5000;
-export const PICK_LIMIT = 200;
 export const LIST_LIMIT = 500;
 export const ONE = 1000;
 
 export { FormatQuantity, CodeDescription };
-
-//#region Search fields
-
-export const SEARCH_FIELDS = {
-    BARCODE: 'barcode',
-    REFERENCE: 'reference',
-};
-
-export const SEARCH_FIELD_LABELS = {
-    barcode: 'Barcode',
-    reference: 'Reference',
-};
-
-// database : TransferDatabase
-// barcode : the whole barcode, reference : the whole reference, else its start (several items open the list)
-// The link of a label QR (ItemLink) is the item itself, whatever the search field
-// Returns { kind: 'found', itemRecID } | { kind: 'pick', value } | { kind: 'notFound', value } | { kind: 'empty' }
-export const LookupScan = async (database, field, scannedText) => {
-    const value = (scannedText ?? '').trim();
-    if (value === '') return { kind: 'empty' };
-
-    const linkRecID = ItemRecIDFromLink(value);
-    if (linkRecID !== null) {
-        const linkItem = await database.GetItem(linkRecID);
-        return linkItem ? { kind: 'found', itemRecID: linkItem.itemRecID } : { kind: 'notFound', value };
-    }
-
-    if (field === SEARCH_FIELDS.BARCODE) {
-        const byBarcode = await database.FindItemsByBarcode(value);
-        if (byBarcode.length === 1) return { kind: 'found', itemRecID: byBarcode[0].itemRecID };
-        if (byBarcode.length > 1) return { kind: 'pick', value };
-        return { kind: 'notFound', value };
-    }
-
-    const exact = await database.FindItemsByReference(value, true, 2);
-    if (exact.length === 1) return { kind: 'found', itemRecID: exact[0].itemRecID };
-
-    const byStart = await database.FindItemsByReference(value, false, 2);
-    if (byStart.length === 1) return { kind: 'found', itemRecID: byStart[0].itemRecID };
-    if (byStart.length > 1) return { kind: 'pick', value };
-
-    return { kind: 'notFound', value };
-};
-
-//#endregion
 
 //#region Lots
 
@@ -67,6 +18,12 @@ export const LotText = (lot) => {
     if (fashion !== '') parts.push(fashion);
     return parts.join('   ');
 };
+
+// The lot rows of the server for one item : { item, lots } (lots : the rows with a lot, none when its available qty is 0)
+export const ItemOfRows = (rows) => ({
+    item: rows[0],
+    lots: rows.filter(row => row.lotRecID !== ''),
+});
 
 //#endregion
 
@@ -84,13 +41,11 @@ export const CheckTransferQty = (qty, available, otherQty) => {
     return { ok: true, value: qty };
 };
 
-// New qty of an existing line : checked with the qty of the other lines of its lot
+// New qty of an existing line : checked with the available qty of its lot (read last) and the qty of the other lines of the lot
 // database : TransferDatabase - Returns { ok: true, value } or { ok: false, message }
 export const CheckLineQty = async (database, line, qty) => {
-    const lot = await database.GetLot(line.lotRecID);
-    // the lot is not in the last download any more : the qty can only go down
-    if (!lot) return qty > 0 && qty <= line.qty ? { ok: true, value: qty } : { ok: false, message: 'The lot has no available qty any more' };
-    return CheckTransferQty(qty, lot.lotAvailable, lot.transferQty - line.qty);
+    const transferQty = await database.GetLotTransferQty(line.lotRecID);
+    return CheckTransferQty(qty, line.lotAvailable, transferQty - line.qty);
 };
 
 // Typed qty, '' or 0 allowed when allowZero (a destination left empty in multiple locations)
@@ -104,11 +59,6 @@ export const ParseTransferQty = (text, decimals, allowZero = false) => {
 //#endregion
 
 //#region Settings checks
-
-export const CheckPageSize = (text) => {
-    const value = parseInt(text, 10);
-    return /^[0-9]{1,4}$/.test((text ?? '').trim()) && value >= 1 && value <= MAX_PAGE_SIZE ? '' : `The download size is a whole number from 1 to ${MAX_PAGE_SIZE}`;
-};
 
 export { CheckServer, CheckMachineName } from './PhysicalCountRules';
 

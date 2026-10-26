@@ -405,17 +405,22 @@ Public Interface IDataService
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
-    Function GetTransferItems(location As String, afterRecID As String, pageSize As Integer) As String
+    Function GetTransferStock(location As String) As String
 
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
-    Function GetTransferLots(location As String, afterRecID As String, pageSize As Integer) As String
+    Function FindTransferItem(location As String, code As String) As String
 
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
-    Function GetTransferBarcodes(afterRecID As String, pageSize As Integer) As String
+    Function GetTransferLotsAvailable(location As String, lotRecIDs As String) As String
+
+    <OperationContract>
+    <FaultContract(GetType(String))>
+    <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
+    Function SaveTransfer(location As String, machineName As String, saveID As String, transfer As String) As String
 
     <OperationContract>
     <FaultContract(GetType(String))>

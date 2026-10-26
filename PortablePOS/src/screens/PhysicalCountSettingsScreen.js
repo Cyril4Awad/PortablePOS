@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
@@ -11,7 +11,10 @@ import MainButton from '../components/controls/MainButton';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
 import PhysicalCountData from '../data/PhysicalCountData';
 import PhysicalCountSettings from '../configuration/PhysicalCountSettings';
-import { CheckLocation, CheckServer, CheckMachineName, CheckPageSize } from '../variables/PhysicalCountRules';
+import DataField from '../components/controls/DataField';
+import { CheckLocation, CheckServer, CheckPageSize } from '../variables/PhysicalCountRules';
+import { MachineNameMessage } from '../configuration/MachineName';
+import MessageBox from '../components/MessageBox';
 
 // Each location has its own server (the location can be on another server), the selected one is used by the physical count
 const PhysicalCountSettingsScreen = props => {
@@ -119,7 +122,7 @@ const PhysicalCountSettingsScreen = props => {
       return;
     }
 
-    Alert.alert('Delete Location', `Do you want to delete location ${deletedProfile.location} on ${deletedProfile.server} and its downloaded count ?`, [
+    MessageBox.alert('Delete Location', `Do you want to delete location ${deletedProfile.location} on ${deletedProfile.server} and its downloaded count ?`, [
       { text: 'No', style: 'cancel' },
       {
         text: 'Yes', onPress: () => {
@@ -134,16 +137,13 @@ const PhysicalCountSettingsScreen = props => {
 
   const SaveDeviceSettings = async () => {
 
-    const machine = machineName.trim();
-    const errorMessage = CheckMachineName(machine) || CheckPageSize(pageSize);
+    const errorMessage = CheckPageSize(pageSize);
     if (errorMessage !== '') {
       alert(errorMessage);
       return;
     }
 
-    await PhysicalCountSettings.saveMachineName(machine);
     await PhysicalCountSettings.savePageSize(parseInt(pageSize, 10));
-    setMachineName(machine);
     alert('Settings Saved');
 
   };
@@ -156,7 +156,7 @@ const PhysicalCountSettingsScreen = props => {
       return;
     }
 
-    Alert.alert('Restore Uploaded', `All the uploaded lines of location ${profile.location} will be sent again on the next upload. Continue ?`, [
+    MessageBox.alert('Restore Uploaded', `All the uploaded lines of location ${profile.location} will be sent again on the next upload. Continue ?`, [
       { text: 'No', style: 'cancel' },
       {
         text: 'Yes', onPress: () => {
@@ -266,15 +266,13 @@ const PhysicalCountSettingsScreen = props => {
 
         <View style={styles.formContainer}>
 
-          <TextBoxField
-            title='Machine Name (as in the physical count)'
-            value={machineName}
-            maxLength={5}
-            multiline={false}
-            numberOfLines={1}
-            autoCapitalize='characters'
-            autoCorrect={false}
-            onChangeText={setMachineName} />
+          {/* The name of the device, changed in the Settings of the device (read only here) */}
+          <DataField
+            title='Machine Name'
+            data={machineName === '' ? 'Not Valid' : machineName}
+            toolTip='Device Name'
+            onPress={() => alert(machineName === '' ? MachineNameMessage() : 'The machine name is the name of the device, change it in the Settings of the device : About phone > Device name.')}
+          />
 
           <TextBoxNumericField
             title='Download Page Size'

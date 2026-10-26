@@ -11,8 +11,6 @@ Monorepo for the **Portable POS** product: a mobile client, a WCF web service, a
 | `StockSearch_CL/` | Shared class library + WinForms admin UI | VB.NET (.NET 4.6.2) |
 | `SimpleTest/` | Small WinForms harness referencing the CL | VB.NET WinExe |
 | `PortablePOSBackend.sln` | Visual Studio solution (CL + WS + SimpleTest) | — |
-| `FrmDO.vb`, `ModList.vb`, `ModVar.vb`, … | Legacy ERP WinForms modules at repo root (not in the `.sln` today) | VB.NET |
-| `dev/` | Local scripts, references, and tooling (not required for production builds) | mixed |
 | `StockSearch_WS/Scripts/` | SQL views/scripts for back-office database objects | T-SQL |
 
 ## Architecture
@@ -62,7 +60,6 @@ Run database scripts under `StockSearch_WS/Scripts/Backoffice/` on the ERP datab
 
 Open `PortablePOSBackend.sln` and build **Debug** or **Release**.
 
-Root-level forms/modules (`FrmDO.vb`, …) are part of the broader desktop codebase; wire them into a project or solution if you need them compiled from this repo.
 
 ### React Native app (`PortablePOS`)
 
@@ -101,8 +98,7 @@ git init
 git add README.md .gitignore
 git add PortablePOSBackend.sln
 git add StockSearch_CL StockSearch_WS SimpleTest PortablePOS
-git add FrmDO.vb ModList.vb ModVar.vb modprintrep.vb reprintslips.vb
-# Add other tracked paths deliberately; avoid dev/gradle and build outputs (see .gitignore)
+# Add other tracked paths deliberately; avoid build outputs (see .gitignore)
 git status
 git commit -m "Initial import: WCF service, WinForms, and React Native app"
 ```
@@ -129,7 +125,6 @@ git push -u origin main
 
 - `bin/`, `obj/`, `node_modules/`, Android `build/`, `.gradle/`, `.vs/`
 - Published WCF packages under `obj/Release/Package/`
-- Large local caches under `dev/gradle/`
 - APK/IPA artifacts unless your release process requires them in Git (usually use CI artifacts instead)
 
 ## Development notes

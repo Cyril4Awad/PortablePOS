@@ -1,45 +1,32 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { DEFAULT_PAGE_SIZE } from '../variables/TransferRules';
+import ServerInfo from './ServerInfo';
+import { MachineName } from './MachineName';
 
-// Device settings of Transfer : the server, the location we transfer from, machine name, download size
-// and the search field of the scan screen
+// Device settings of Transfer : the location we transfer from (the one of the server)
+// The server is the one of the login screen, the machine name is the name of the device
+// and the last side of the stock search (product groups / items)
 
-const serverStorageKey = '@app_transferServer';
 const locationStorageKey = '@app_transferLocation';
-const machineNameStorageKey = '@app_transferMachineName';
-const pageSizeStorageKey = '@app_transferPageSize';
-const searchFieldStorageKey = '@app_transferSearchField';
+const searchItemsModeStorageKey = '@app_transferSearchItemsMode';
 
-const server = () => AsyncStorage.getItem(serverStorageKey).then(result => result ?? '');
+const server = () => ServerInfo.serverIP().then(result => result ?? '');
 
 // { locationCode, locationDescription } or null
 const location = () => AsyncStorage.getItem(locationStorageKey).then(result => result ? JSON.parse(result) : null).catch(() => null);
 
-const machineName = () => AsyncStorage.getItem(machineNameStorageKey).then(result => result ?? '');
+const machineName = MachineName;
 
-const pageSize = () => AsyncStorage.getItem(pageSizeStorageKey).then(result => result ? parseInt(result, 10) : DEFAULT_PAGE_SIZE);
-
-const searchField = () => AsyncStorage.getItem(searchFieldStorageKey).then(result => result ?? '').catch(() => '');
-
-const saveServer = (value) => AsyncStorage.setItem(serverStorageKey, value);
+const searchItemsMode = () => AsyncStorage.getItem(searchItemsModeStorageKey).then(result => result === 'Y').catch(() => false);
 
 const saveLocation = (value) => AsyncStorage.setItem(locationStorageKey, JSON.stringify(value));
 
-const saveMachineName = (value) => AsyncStorage.setItem(machineNameStorageKey, value);
-
-const savePageSize = (value) => AsyncStorage.setItem(pageSizeStorageKey, value.toString());
-
-const saveSearchField = (value) => AsyncStorage.setItem(searchFieldStorageKey, value).catch(() => { });
+const saveSearchItemsMode = (itemsMode) => AsyncStorage.setItem(searchItemsModeStorageKey, itemsMode ? 'Y' : 'N').catch(() => { });
 
 export default {
     server,
     location,
     machineName,
-    pageSize,
-    searchField,
-    saveServer,
+    searchItemsMode,
     saveLocation,
-    saveMachineName,
-    savePageSize,
-    saveSearchField,
+    saveSearchItemsMode,
 }

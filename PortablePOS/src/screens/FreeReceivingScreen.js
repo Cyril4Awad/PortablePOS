@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Modal, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Modal, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Colors from '../variables/Colors';
 import Sizing from '../variables/Sizing';
@@ -12,6 +12,8 @@ import FreeReceivingData from '../data/FreeReceivingData';
 import FreeReceivingDatabase from '../database/FreeReceivingDatabase';
 import FreeReceivingSettings from '../configuration/FreeReceivingSettings';
 import { FormatQuantity } from '../variables/FreeReceivingRules';
+import MessageBox from '../components/MessageBox';
+import { MachineNameMessage } from '../configuration/MachineName';
 
 const twoDigits = (value) => value.toString().padStart(2, '0');
 
@@ -57,17 +59,17 @@ const FreeReceivingScreen = props => {
       alert('Please fill the server in the free receiving settings');
     }
     else if (machineName === '') {
-      alert('Please fill the machine name in the free receiving settings');
+      alert(MachineNameMessage());
     }
     else if (info !== null && info.complete === 0 && info.server === server) {
-      Alert.alert('Download Not Completed', 'The last download of the stock file did not finish.', [
+      MessageBox.alert('Download Not Completed', 'The last download of the stock file did not finish.', [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Restart Download', onPress: () => RunDownload(true) },
         { text: 'Continue Download', onPress: () => RunDownload(false) },
       ]);
     }
     else if (info !== null) {
-      Alert.alert('Download', `The stock file of this device will be replaced by the one of ${server}. The collected items are kept.`, [
+      MessageBox.alert('Download', `The stock file of this device will be replaced by the one of ${server}. The collected items are kept.`, [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Download', onPress: () => RunDownload(true) },
       ]);
@@ -230,7 +232,7 @@ const FreeReceivingScreen = props => {
           <View style={styles.fieldHalf}>
             <ChoiceField
               title='Machine'
-              value={machineName === '' ? 'Not Defined' : machineName}
+              value={machineName === '' ? 'Not Valid' : machineName}
               onPress={() => props.navigation.navigate('FreeReceivingSettings')}
               style={{ borderRightWidth: 0, borderBottomWidth: 0 }}
             />

@@ -48,10 +48,6 @@ PortablePOS/**/fastlane/screenshots
 PortablePOS/**/fastlane/test_output
 PortablePOS/vendor/bundle/
 
-# Local dev caches (do not version Gradle distributions under dev/)
-dev/gradle/
-dev/android-avd/
-
 # --- OS ---
 Thumbs.db
 ehthumbs.db

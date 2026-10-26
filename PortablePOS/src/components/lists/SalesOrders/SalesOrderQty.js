@@ -6,11 +6,12 @@ import Colors from '../../../variables/Colors';
 import StockData from '../../../data/StockData';
 import SalesOrdersData from '../../../data/SalesOrdersData';
 import { FontSize } from '../../../variables/ResponsiveFont';
-import { View, StyleSheet, Text, TextInput, Image, TouchableOpacity, Modal, ScrollView, Keyboard, FlatList, Alert } from 'react-native';
+import { View, StyleSheet, Text, TextInput, Image, TouchableOpacity, Modal, ScrollView, Keyboard, FlatList } from 'react-native';
 import ModalTitle from '../../ModalTitle';
 import SalesOrderQtyLine from './SalesOrderQtyLine';
 import LoadingData from '../../LoadingData';
 import ServerError from '../../ServerError';
+import MessageBox from '../../MessageBox';
 
 const SalesOrderQty = props => {
 
@@ -147,7 +148,7 @@ const SalesOrderQty = props => {
                 sopqQty={dlData.item.sopqQty}
                 deleteLine={() => {
 
-                    Alert.alert('Delete Line', 'Do you want to delete the record ?', [
+                    MessageBox.alert('Delete Line', 'Do you want to delete the record ?', [
                         {
                             text: 'No',
                             onPress: () => { },
