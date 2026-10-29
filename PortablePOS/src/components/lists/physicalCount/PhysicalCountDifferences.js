@@ -10,7 +10,7 @@ import { FormatQuantity, LineFields } from '../../../variables/PhysicalCountRule
 const SEARCH_DELAY_MS = 300;
 
 // List Differences : the lines whose counted qty is not the available qty, view only (search, nothing else)
-// Shown only with the available qty privilege (the available qty is not downloaded otherwise)
+// Shown only with the List Differences negation, the available qty itself only with the Show Available Qty negation
 // props : visible, countKey, header, onClose
 const PhysicalCountDifferences = props => {
 
@@ -57,7 +57,7 @@ const PhysicalCountDifferences = props => {
                 <Text style={styles.descriptionText} numberOfLines={1}>{fields.showBook ? item.bookTitle : item.itemDescription}</Text>
                 <View style={styles.rowLine}>
                     <Text style={styles.infoText} numberOfLines={1}>{infoTexts.join('   ')}</Text>
-                    <Text style={styles.qtyText}>Avlb {FormatQuantity(item.systemQty)}   Counted {FormatQuantity(item.counted)}</Text>
+                    <Text style={styles.qtyText}>{fields.showAvailableQty ? `Avlb ${FormatQuantity(item.systemQty)}   ` : ''}Counted {FormatQuantity(item.counted)}</Text>
                 </View>
             </View>
         );

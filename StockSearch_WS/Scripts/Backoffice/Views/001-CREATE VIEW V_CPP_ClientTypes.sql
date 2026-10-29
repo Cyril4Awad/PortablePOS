@@ -2,7 +2,7 @@ SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
 
-CREATE VIEW V_CPP_ClientTypes
+CREATE OR ALTER VIEW V_CPP_ClientTypes
 AS
     SELECT  ClTp_Code [clientTypeCode] ,
             ClTp_Desc [clientTypeDesc]

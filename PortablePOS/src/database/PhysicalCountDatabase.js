@@ -13,7 +13,9 @@ enablePromise(true);
 // Version 2 : the count is keyed by server + location (version 1 was keyed by location only)
 // Version 3 : trading / fashion / expiry / book modes, fashion fields, available qty only with the privilege
 // Version 4 : book title of the lines (added to the existing table, the downloaded counts are kept)
-const schemaVersion = 4;
+// Version 5 : unit of the lines and the log of every counting step (PC_Logs), the downloaded counts are kept
+// Version 6 : negations of the header (List Differences, the user they were read for), the downloaded counts are kept
+const schemaVersion = 6;
 
 // Kept as a promise so screens loading at the same time share one connection
 let lcDBPromise = null;
@@ -52,6 +54,18 @@ const upgradeTables = async (db) => {
     if (names.length > 0 && !names.includes('bookTitle')) {
       await db.executeSql('ALTER TABLE PC_Lines ADD COLUMN bookTitle TEXT');
     }
+    if (names.length > 0 && !names.includes('itemUnit')) {
+      await db.executeSql('ALTER TABLE PC_Lines ADD COLUMN itemUnit TEXT');
+    }
+    const [headerColumns] = await db.executeSql('PRAGMA table_info(PC_Header)');
+    const headerNames = [];
+    for (let index = 0; index < headerColumns.rows.length; index++) headerNames.push(headerColumns.rows.item(index).name);
+    if (headerNames.length > 0 && !headerNames.includes('showListDifferences')) {
+      await db.executeSql('ALTER TABLE PC_Header ADD COLUMN showListDifferences TEXT');
+    }
+    if (headerNames.length > 0 && !headerNames.includes('negationUser')) {
+      await db.executeSql('ALTER TABLE PC_Header ADD COLUMN negationUser TEXT');
+    }
   }
 
   // Scratch table of the first scan for testing (it now counts on the downloaded count)
@@ -81,6 +95,8 @@ const createTables = async (db) => {
                          expiryMode TEXT,
                          bookMode TEXT,
                          showAvailableQty TEXT,
+                         showListDifferences TEXT,
+                         negationUser TEXT,
                          linesCount INTEGER,
                          barcodesCount INTEGER,
                          linesStored INTEGER NOT NULL DEFAULT 0,
@@ -105,6 +121,7 @@ const createTables = async (db) => {
                          sizeOrder TEXT,
                          sizeDescription TEXT,
                          bookTitle TEXT,
+                         itemUnit TEXT,
                          expiry TEXT,
                          batch TEXT,
                          systemQty INTEGER,
@@ -123,6 +140,27 @@ const createTables = async (db) => {
                          lineRecID TEXT NOT NULL,
                          PRIMARY KEY (server, location, rowNumber) )`);
   await db.executeSql('CREATE INDEX IF NOT EXISTS IX_PC_Barcodes_Barcode ON PC_Barcodes (server, location, barcode)');
+
+  // Every counting step (scan, set total, undo), uploaded to tbl_CPP_PhysicalCountLogs with the count
+  // Kept by a new download (keyed by count number) until uploaded. qty / total : thousandths
+  // qty : added qty (add), typed total (set), change of the total (undo, change) - total : the total of the line after the step
+  await db.executeSql(`CREATE TABLE IF NOT EXISTS PC_Logs (
+                         logID INTEGER PRIMARY KEY AUTOINCREMENT,
+                         server TEXT NOT NULL,
+                         location TEXT NOT NULL,
+                         countNumber TEXT NOT NULL,
+                         machineName TEXT NOT NULL,
+                         lineRecID TEXT NOT NULL,
+                         itemRecID TEXT,
+                         itemUnit TEXT,
+                         qty INTEGER NOT NULL,
+                         total INTEGER,
+                         mode TEXT NOT NULL,
+                         action TEXT NOT NULL,
+                         userCode TEXT,
+                         dateStamp TEXT NOT NULL,
+                         uploaded INTEGER NOT NULL DEFAULT 0 )`);
+  await db.executeSql('CREATE INDEX IF NOT EXISTS IX_PC_Logs_Uploaded ON PC_Logs (server, location, uploaded, logID)');
 };
 
 const query = async (sql, params = []) => {
@@ -197,8 +235,9 @@ const GetHeader = async (countKey) => {
   return rows.length > 0 ? rows[0] : null;
 };
 
-// Lines per state of the count : { notCounted, pending, uploaded, countedQty }
+// Lines per state of the count : { notCounted, pending, uploaded, countedQty, pendingLogs }
 // countedQty : total qty of the counted lines (uploaded or not), thousandths
+// pendingLogs : counting steps of the server + location not uploaded yet (PC_Logs)
 const GetLinesSummary = async (countKey) => {
   const rows = await query(
     'SELECT state, COUNT(*) total, IFNULL(SUM(counted), 0) qty FROM PC_Lines WHERE server = ? AND location = ? GROUP BY state',
@@ -210,21 +249,23 @@ const GetLinesSummary = async (countKey) => {
     if (row.state === 2) summary.uploaded = row.total;
     if (row.state !== 0) summary.countedQty += row.qty;
   });
+  summary.pendingLogs = await CountPendingLogs(countKey);
   return summary;
 };
 
 // Starts a new download : the previous count of the server + location is replaced
-const StartDownload = (countKey, machineName, header) => executeInTransaction([
+// negationUser : the user the negations (showAvailableQty, showListDifferences) were read for
+const StartDownload = (countKey, machineName, header, negationUser) => executeInTransaction([
   ['DELETE FROM PC_Barcodes WHERE server = ? AND location = ?', [countKey.server, countKey.location]],
   ['DELETE FROM PC_Lines WHERE server = ? AND location = ?', [countKey.server, countKey.location]],
   ['DELETE FROM PC_Header WHERE server = ? AND location = ?', [countKey.server, countKey.location]],
   [`INSERT INTO PC_Header (server, location, machineName, countNumber, locationDescription, warehouse, dateCount,
                            userToUpdate, decimals, tradingMode, fashionMode, expiryMode, bookMode, showAvailableQty,
-                           linesCount, barcodesCount)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           showListDifferences, negationUser, linesCount, barcodesCount)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [countKey.server, countKey.location, machineName, header.countNumber, header.locationDescription, header.warehouse, header.dateCount,
       header.userToUpdate, header.decimals, header.tradingMode, header.fashionMode, header.expiryMode, header.bookMode, header.showAvailableQty,
-      header.linesCount, header.barcodesCount]],
+      header.showListDifferences ?? 'N', negationUser, header.linesCount, header.barcodesCount]],
 ]);
 
 // Stores one page of lines and moves the resume point
@@ -233,11 +274,11 @@ const SaveLinesPage = (countKey, lines, toMilli) => {
   const statements = lines.map(line => [
     `INSERT OR REPLACE INTO PC_Lines (server, location, lineRecID, rowNumber, itemRecID, itemReference, itemReferenceUpper,
                                       itemDescription, colorCode, colorDescription, gridCode, gridDescription, sizeOrder, sizeDescription,
-                                      bookTitle, expiry, batch, systemQty, counted, state)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+                                      bookTitle, itemUnit, expiry, batch, systemQty, counted, state)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [countKey.server, countKey.location, line.lineRecID, line.rowNumber, line.itemRecID, line.itemReference, line.itemReference.toUpperCase(),
       line.itemDescription, line.colorCode, line.colorDescription, line.gridCode, line.gridDescription, line.sizeOrder, line.sizeDescription,
-      line.bookTitle ?? '', line.expiry, line.batch, line.systemQty === undefined ? null : toMilli(line.systemQty), toMilli(line.counted)]]);
+      line.bookTitle ?? '', line.itemUnit ?? '', line.expiry, line.batch, line.systemQty === undefined ? null : toMilli(line.systemQty), toMilli(line.counted)]]);
   statements.push([
     'UPDATE PC_Header SET linesStored = (SELECT COUNT(*) FROM PC_Lines WHERE server = ? AND location = ?) WHERE server = ? AND location = ?',
     [countKey.server, countKey.location, countKey.server, countKey.location]]);
@@ -253,6 +294,11 @@ const SaveBarcodesPage = (countKey, barcodes) => {
     [countKey.server, countKey.location, countKey.server, countKey.location]]);
   return executeInTransaction(statements);
 };
+
+// The negations of another user (the user logged in changed), read again from the server
+const UpdateNegations = (countKey, negations, negationUser) => execute(
+  'UPDATE PC_Header SET showAvailableQty = ?, showListDifferences = ?, negationUser = ? WHERE server = ? AND location = ?',
+  [negations.showAvailableQty, negations.showListDifferences, negationUser, countKey.server, countKey.location]);
 
 const CompleteDownload = (countKey) => execute(
   'UPDATE PC_Header SET complete = 1 WHERE server = ? AND location = ?', [countKey.server, countKey.location]);
@@ -307,15 +353,34 @@ const FindLineByQr = async (countKey, itemRecID, expiry, batch) => {
   return rows.length > 0 ? rows[0].lineRecID : null;
 };
 
-// Every change of the total marks the line as counted and not uploaded
-const SaveLineCounted = (countKey, lineRecID, counted) => execute(
-  'UPDATE PC_Lines SET counted = ?, state = 1 WHERE server = ? AND location = ? AND lineRecID = ?',
-  [counted, countKey.server, countKey.location, lineRecID]);
+// "2026-10-28 09:15:02" : device time of a log (the format the server reads)
+const LogDateStamp = () => {
+  const now = new Date();
+  const two = value => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())} ${two(now.getHours())}:${two(now.getMinutes())}:${two(now.getSeconds())}`;
+};
+
+// log : { qty, mode, action, userCode } - the log row of a counting step, the count, item and unit come from the header and the line
+const LogStatement = (countKey, lineRecID, total, log) => [
+  `INSERT INTO PC_Logs (server, location, countNumber, machineName, lineRecID, itemRecID, itemUnit, qty, total, mode, action, userCode, dateStamp)
+   SELECT h.server, h.location, h.countNumber, h.machineName, l.lineRecID, l.itemRecID, l.itemUnit, ?, ?, ?, ?, ?, ?
+   FROM PC_Lines l INNER JOIN PC_Header h ON h.server = l.server AND h.location = l.location
+   WHERE l.server = ? AND l.location = ? AND l.lineRecID = ?`,
+  [log.qty, total, log.mode, log.action, log.userCode ?? '', LogDateStamp(), countKey.server, countKey.location, lineRecID]];
+
+// Every change of the total marks the line as counted and not uploaded, the step is logged with it
+const SaveLineCounted = (countKey, lineRecID, counted, log) => executeInTransaction([
+  ['UPDATE PC_Lines SET counted = ?, state = 1 WHERE server = ? AND location = ? AND lineRecID = ?',
+    [counted, countKey.server, countKey.location, lineRecID]],
+  ...(log ? [LogStatement(countKey, lineRecID, counted, log)] : []),
+]);
 
 // Undo : puts back the total and the state the line had before the last entry
-const RestoreLineCounted = (countKey, lineRecID, counted, state) => execute(
-  'UPDATE PC_Lines SET counted = ?, state = ? WHERE server = ? AND location = ? AND lineRecID = ?',
-  [counted, state, countKey.server, countKey.location, lineRecID]);
+const RestoreLineCounted = (countKey, lineRecID, counted, state, log) => executeInTransaction([
+  ['UPDATE PC_Lines SET counted = ?, state = ? WHERE server = ? AND location = ? AND lineRecID = ?',
+    [counted, state, countKey.server, countKey.location, lineRecID]],
+  ...(log ? [LogStatement(countKey, lineRecID, counted, log)] : []),
+]);
 
 //#endregion
 
@@ -360,6 +425,20 @@ const MarkLinesUploaded = (countKey, lineRecIDs) => executeInTransaction(
     'UPDATE PC_Lines SET state = 2 WHERE server = ? AND location = ? AND lineRecID = ? AND state = 1',
     [countKey.server, countKey.location, lineRecID]]));
 
+// Logs not uploaded of the server + location (any count, a new download keeps them), oldest first
+const GetPendingLogs = (countKey, limit) => query(
+  'SELECT * FROM PC_Logs WHERE server = ? AND location = ? AND uploaded = 0 ORDER BY logID LIMIT ?',
+  [countKey.server, countKey.location, limit]);
+
+const CountPendingLogs = async (countKey) => {
+  const rows = await query('SELECT COUNT(*) total FROM PC_Logs WHERE server = ? AND location = ? AND uploaded = 0',
+    [countKey.server, countKey.location]);
+  return rows[0].total;
+};
+
+const MarkLogsUploaded = (logIDs) => executeInTransaction(
+  logIDs.map(logID => ['UPDATE PC_Logs SET uploaded = 1 WHERE logID = ?', [logID]]));
+
 // Sends again every uploaded line on the next upload
 const RestoreUploaded = (countKey) => execute(
   'UPDATE PC_Lines SET state = 1 WHERE server = ? AND location = ? AND state = 2', [countKey.server, countKey.location]);
@@ -378,6 +457,7 @@ export default {
   SaveLinesPage,
   SaveBarcodesPage,
   CompleteDownload,
+  UpdateNegations,
   GetLine,
   FindLinesByBarcode,
   FindLinesByReferencePrefix,
@@ -391,4 +471,7 @@ export default {
   GetPendingLines,
   MarkLinesUploaded,
   RestoreUploaded,
+  GetPendingLogs,
+  CountPendingLogs,
+  MarkLogsUploaded,
 }

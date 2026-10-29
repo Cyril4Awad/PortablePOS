@@ -37,7 +37,7 @@ const MenuItemsScreen = props => {
 
     const saveMenuItems = () => {
         MenuData.SaveControlizedMenu(
-            STEPS.filter(item => item.type === 'MI').map(item => ({ recKey: item.recKey, menuActive: isChecked(item) })),
+            STEPS.filter(item => item.type === 'MI').map(item => ({ recKey: item.recKey, menuActive: isChecked(item), title: item.title })),
             { setIsLoading },
             () => props.navigation.navigate('Main')
         );

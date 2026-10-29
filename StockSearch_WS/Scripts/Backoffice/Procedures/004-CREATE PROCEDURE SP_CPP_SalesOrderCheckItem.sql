@@ -1,7 +1,7 @@
 SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
-Alter PROCEDURE SP_CPP_SalesOrderCheckItem
+CREATE OR ALTER PROCEDURE SP_CPP_SalesOrderCheckItem
     @LocationCode VARCHAR(2) ,
     @HeaderRecID NUMERIC(18, 0) ,
     @ItemRecID NUMERIC(18, 3)

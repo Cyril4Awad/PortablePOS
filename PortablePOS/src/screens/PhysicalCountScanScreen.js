@@ -5,6 +5,7 @@ import { FontSize } from '../variables/ResponsiveFont';
 import DataField from '../components/controls/DataField';
 import PhysicalCountItemPicker from '../components/lists/physicalCount/PhysicalCountItemPicker';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
+import { getLoginUserCode } from '../variables/LoginInfo';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
 import {
   AllowedDecimals, FormatQuantity, LookupScan, LineFields, CodeDescription,
@@ -78,7 +79,8 @@ const PhysicalCountScanScreen = ({ route, navigation }) => {
     const result = ScanCount(currentLine.counted);
     if (!result.ok) throw new Error(result.message);
 
-    await PhysicalCountDatabase.SaveLineCounted(countKey, recID, result.total);
+    await PhysicalCountDatabase.SaveLineCounted(countKey, recID, result.total,
+      { qty: result.total - currentLine.counted, mode: 'scanItems', action: 'add', userCode: getLoginUserCode() });
     await ShowLine(recID, result.lastScanned, result.lastScanEnabled);
 
     PlayScanOk();
@@ -130,7 +132,8 @@ const PhysicalCountScanScreen = ({ route, navigation }) => {
       const result = computeResult();
       if (!result.ok) throw new Error(result.message);
 
-      await PhysicalCountDatabase.SaveLineCounted(countKey, line.lineRecID, result.total);
+      await PhysicalCountDatabase.SaveLineCounted(countKey, line.lineRecID, result.total,
+        { qty: result.total - line.counted, mode: 'scanItems', action: 'change', userCode: getLoginUserCode() });
       setLine({ ...line, counted: result.total, state: 1 });
       setTotalText(FormatQuantity(result.total));
 

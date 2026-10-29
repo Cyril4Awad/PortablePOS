@@ -3,7 +3,14 @@ import DeviceInfo from "react-native-device-info";
 // Calls a method of the web service of a given server (Physical Count, Free Receiving),
 // not the server of the login screen
 
-export const serviceURL = (server) => 'http://' + server + '//PortablePOS_WS/dataservice.svc/Web/';
+// The server as typed in the settings : an IP or name (http://), or a full address starting with http:// or https://
+// (https://assets.example.com for the devices on GSM)
+export const serverBaseURL = (server) => {
+    const value = (server ?? '').trim().replace(/\/+$/, '');
+    return /^https?:\/\//i.test(value) ? value : 'http://' + value;
+};
+
+export const serviceURL = (server) => serverBaseURL(server) + '//PortablePOS_WS/dataservice.svc/Web/';
 
 // Returns the result string of the method, rejects with the error message
 // timeoutMs : stops waiting after that time (the request may still finish on the server), 0 = waits

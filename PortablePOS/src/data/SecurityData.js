@@ -43,7 +43,8 @@ const RegisterDevice = () => {
 
             })
             .catch(err => {
-                console.log(err);
+                // The login needs a registered device : the user is told when the server cannot be reached
+                alert('The device could not be registered, check the connection to the server and try again.\n\n' + err.message);
             });
 
     }).catch((error) => {

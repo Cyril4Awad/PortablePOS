@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { serviceURL } from '../data/ServiceCall';
 
 const serverIpStorageKey = '@app_serverIP';
 const printerStorageKey = '@app_printerName';
@@ -8,7 +9,7 @@ let serverURL = function readData() {
     return new Promise((resolve, reject)=>{
         try {
             AsyncStorage.getItem(serverIpStorageKey, (err, result) => {
-                resolve('http://' + result + '//PortablePOS_WS/dataservice.svc/Web/');
+                resolve(serviceURL(result));
             });
         }
         catch{

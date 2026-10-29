@@ -2,7 +2,7 @@ SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
 
-CREATE FUNCTION dbo.F_CPP_VatType
+CREATE OR ALTER FUNCTION dbo.F_CPP_VatType
     (
       @LocationCode VARCHAR(2) ,
       @ClientPriceCat VARCHAR(1)

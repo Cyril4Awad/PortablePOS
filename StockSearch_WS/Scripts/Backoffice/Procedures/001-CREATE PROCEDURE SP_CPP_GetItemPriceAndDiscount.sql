@@ -2,7 +2,7 @@ SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
 
-CREATE PROCEDURE SP_CPP_GetItemPriceAndDiscount
+CREATE OR ALTER PROCEDURE SP_CPP_GetItemPriceAndDiscount
      @LocationCode VARCHAR(2) ,
      @ClientRecID NUMERIC(18,0) ,
      @ItemRecID NUMERIC(18,0) ,

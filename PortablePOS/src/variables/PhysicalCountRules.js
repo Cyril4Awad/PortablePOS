@@ -2,6 +2,7 @@
 // Quantities are whole thousandths (milli) : 12.5 => 12500
 
 import { ItemRecIDFromLink } from './ItemLink';
+import { getLoginUserCode } from './LoginInfo';
 
 const SCALE = 1000;
 const MAX_DECIMALS = 3;
@@ -111,9 +112,14 @@ export const LineFields = (header, line) => {
         showExpiry: header?.expiryMode === 'Y' && hasExpiry,
         showFashion: header?.fashionMode === 'Y' && hasFashion,
         showBook: header?.bookMode === 'Y' && hasBook,
-        showAvailableQty: header?.showAvailableQty === 'Y',
+        showAvailableQty: NegationAllowed(header, 'showAvailableQty'),
     };
 };
+
+// Negation of the downloaded count (showAvailableQty, showListDifferences) : only for the user it was read for,
+// another user logged in offline sees neither (they are read again for him when the server answers)
+export const NegationAllowed = (header, negation) =>
+    header?.[negation] === 'Y' && (header?.negationUser ?? '').toUpperCase() === getLoginUserCode().toUpperCase();
 
 // Code - Description, or only one of them when the other is empty
 export const CodeDescription = (code, description) => [code, description].filter(text => (text ?? '') !== '').join(' - ');
@@ -190,11 +196,12 @@ export const CheckLocation = (text) => /^[A-Za-z0-9]{1,2}$/.test(text) ? '' : 'T
 
 export const CheckMachineName = (text) => /^[A-Za-z0-9]{1,5}$/.test(text) ? '' : 'The machine name is 1 to 5 letters or digits';
 
-// host or host:port, without http:// and without a path
+// host or host:port without a path, optionally after http:// or https:// (https://assets.example.com for the devices on GSM)
 export const CheckServer = (text) => {
     if (text === '') return 'Enter the server address';
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return 'Type the server without http:// (for example 0.0.0.0 or server:8080)';
-    if (!/^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/.test(text)) return 'The server may only contain letters, digits, dots, dashes and an optional :port';
+    const host = text.replace(/^https?:\/\//i, '');
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(host)) return 'The server starts with http:// or https://, or with the address (for example 0.0.0.0 or server:8080)';
+    if (!/^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/.test(host)) return 'The server may only contain letters, digits, dots, dashes and an optional :port';
     return '';
 };
 

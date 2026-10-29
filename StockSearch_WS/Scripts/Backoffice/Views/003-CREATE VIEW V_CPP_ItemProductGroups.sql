@@ -1,7 +1,7 @@
 SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
-CREATE VIEW V_CPP_ItemProductGroups
+CREATE OR ALTER VIEW V_CPP_ItemProductGroups
 AS
     SELECT  IT_Code [itemProductGroupCode] ,
             IT_DESC [itemProductGroupDesc]

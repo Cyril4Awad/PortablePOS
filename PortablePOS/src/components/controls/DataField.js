@@ -6,7 +6,8 @@ import { FontSize } from '../../variables/ResponsiveFont';
 const DataField = props => {
 
     return (
-        <TouchableOpacity style={styles.container} onPress={props.onPress}>
+        // Without onPress the field is read only (no press feedback)
+        <TouchableOpacity style={styles.container} onPress={props.onPress} disabled={!props.onPress}>
 
             <View style={styles.fieldHeader}>
 

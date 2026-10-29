@@ -47,6 +47,20 @@ Public Class DataService
 
             Else
 
+                'Only a registered device logs in (SU always can) : the row of the device in tbl_CPP_Devices with the IDs filled by Register Device,
+                'the token header sent by the portable is DeviceName|DeviceID_UniqueID (same check as Global.asax)
+                Dim deviceToken As String = If(System.ServiceModel.Web.WebOperationContext.Current?.IncomingRequest.Headers("token"), "")
+
+                If Not RecordsExists($"SELECT TOP 1 1 FROM tbl_CPP_Devices
+                                       WHERE DEV_Name = '{deviceName.Trim.Replace("'", "''")}'
+                                         AND ISNULL(DEV_ID, '') <> ''
+                                         AND ISNULL(DEV_UniqueID, '') <> ''
+                                         AND CONCAT(DEV_Name, '|', DEV_ID, '_', DEV_UniqueID) = '{deviceToken.Replace("'", "''")}' ") Then
+
+                    Return "UNR"
+
+                End If
+
                 If RecordsExists($"SELECT TOP 1 1 FROM tbl_CPP_Devices WHERE DEV_LoggedInUser = '{userCode.Trim.Replace("'", "''")}' AND DEV_Name <> '{deviceName.Trim.Replace("'", "''")}' ") Then
 
                     Return "UAL"
@@ -395,6 +409,9 @@ Public Class DataService
             End If
 
             strsql &= " ORDER BY clientGeoStatus DESC, clientName "
+
+            'V_CPP_ClientsVisits lists the days of the year with a recursive CTE (365 levels, the default limit is 100)
+            If onlyHavingVisits Then strsql &= " OPTION (MAXRECURSION 400) "
 
             Using dtClients As New DataTable
 
@@ -4418,7 +4435,41 @@ Public Class DataService
 
     End Function
 
-    'menuItems : JSON array [{"recKey":"C1","menuActive":true}, ...] - only the super user can change the menu
+    'The privileges of the user on the menu items (tbl_CPP_UserPriv, User Privilege tab of the backend) :
+    '[{"stepCode":"P1","allowed":"1","privTill":"2026-12-31"}, ...] - privTill "" = no end, a menu item without a row is not allowed
+    Public Function GetUserPrivileges(userCode As String) As String Implements IDataService.GetUserPrivileges
+
+        Try
+
+            Using dtPriv As New DataTable
+
+                Using daSql As New SqlDataAdapter(" SELECT  LTRIM(RTRIM(UP_StepCode)) [stepCode] ,
+                                                             UP_Allowed [allowed] ,
+                                                             ISNULL(CONVERT(VARCHAR(10), UP_PrivTill, 23), '') [privTill]
+                                                     FROM    dbo.tbl_CPP_UserPriv
+                                                     WHERE   UP_UserCode = @UserCode ",
+                                                  DecryptString(ServerSent.lcConSql, DecPS("REDACTED")))
+                    daSql.SelectCommand.CommandTimeout = 600
+                    daSql.SelectCommand.Parameters.Add("@UserCode", SqlDbType.VarChar, 4).Value = If(userCode, "").Trim
+                    daSql.Fill(dtPriv)
+                End Using
+
+                If dtPriv.Rows.Count = 0 Then
+                    Return "[]"
+                Else
+                    Return GetJson(dtPriv)
+                End If
+
+            End Using
+
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
+
+    End Function
+
+    'menuItems : JSON array [{"recKey":"C1","menuActive":true,"title":"Clients View"}, ...] - only the super user can change the menu
+    'title : the menu title of the app (shown by the User Privilege tab of the backend), kept as is when not sent
     Public Function SaveControlizedMenu(userCode As String, menuItems As String) As String Implements IDataService.SaveControlizedMenu
 
         Try
@@ -4439,20 +4490,24 @@ Public Class DataService
 
                     Using cmsql As New SqlCommand(" UPDATE dbo.tbl_CPP_ControlizedMenu
                                                     SET    CM_MenuActive = @MenuActive ,
+                                                           CM_MenuTitle = ISNULL(@MenuTitle, CM_MenuTitle) ,
                                                            CM_UStamp = 'SU' ,
                                                            CM_DStamp = GETDATE()
                                                     WHERE  CM_RecKey = @RecKey ;
 
                                                     IF @@ROWCOUNT = 0
-                                                        INSERT INTO dbo.tbl_CPP_ControlizedMenu ( CM_RecKey, CM_MenuActive, CM_UStamp, CM_DStamp )
-                                                        VALUES ( @RecKey, @MenuActive, 'SU', GETDATE() ) ; ", cnsql, trnSql)
+                                                        INSERT INTO dbo.tbl_CPP_ControlizedMenu ( CM_RecKey, CM_MenuTitle, CM_MenuActive, CM_UStamp, CM_DStamp )
+                                                        VALUES ( @RecKey, @MenuTitle, @MenuActive, 'SU', GETDATE() ) ; ", cnsql, trnSql)
 
                         cmsql.CommandTimeout = 900
                         cmsql.Parameters.Add("@RecKey", SqlDbType.VarChar, 10)
+                        cmsql.Parameters.Add("@MenuTitle", SqlDbType.NVarChar, 50)
                         cmsql.Parameters.Add("@MenuActive", SqlDbType.Bit)
 
                         For Each item As JObject In arrItems
                             cmsql.Parameters("@RecKey").Value = item("recKey").ToString.Trim
+                            Dim strTitle As String = If(item("title")?.ToString, "").Trim
+                            cmsql.Parameters("@MenuTitle").Value = If(strTitle = "", CObj(DBNull.Value), Left(strTitle, 50))
                             'The portable can send true / false or "1" / "0" (GetControlizedMenu returns the bit as "1" / "0")
                             Dim strActive As String = item("menuActive").ToString.Trim
                             cmsql.Parameters("@MenuActive").Value = (strActive = "1" OrElse strActive.Equals("true", StringComparison.OrdinalIgnoreCase))
@@ -4590,22 +4645,65 @@ Public Class DataService
     End Function
 
     'Same rule as the SOAP service : the available qty is hidden when a user has mnuOperCountManModify without the show available qty exception
-    Private Function PhysicalCountShowAvailableQty(cmsql As SqlCommand) As Boolean
+    'Negations of the portable (tbl_CPP_NegationButton, Negations tab of the backend) on the Physical Count (P1)
+    Private Const PhysicalCountStep As String = "P1"
+    Private Const PhysicalCountButtonAvailableQty As String = "btnShowAvailableQty"
+    Private Const PhysicalCountButtonListDifferences As String = "btnListDifferences"
+
+    'True when the user can do the action of the button on the company of the location (NB_HasNeg = 1)
+    'No row = not allowed, the super user SU is always allowed
+    Private Function PhysicalCountNegation(cmsql As SqlCommand, location As String, userCode As String, button As String) As Boolean
+
+        If String.IsNullOrWhiteSpace(userCode) Then Return False
+        If userCode.Trim.ToUpper = "SU" Then Return True
 
         cmsql.Parameters.Clear()
         cmsql.CommandText = " SELECT TOP 1 1
-                              FROM   dbo.Com_UserPriv
-                              WHERE  Priv_AppCode = 'COUNT'
-                                     AND Priv_StepCode = 'mnuOperCountManModify'
-                                     AND Priv_UserCode NOT IN ( SELECT Nbu_User
-                                                                FROM   dbo.Com_NegationButton
-                                                                WHERE  Nbu_Appl = 'COUNT'
-                                                                       AND Nbu_Module = 'COUNT'
-                                                                       AND Nbu_Step = 'mnuOperCountManModify'
-                                                                       AND Nbu_Button = 'btnShowAvailableQuantity'
-                                                                       AND Nbu_Exception = 1 ) "
+                              FROM   dbo.tbl_CPP_NegationButton
+                              WHERE  NB_UserCode = @UserCode
+                                     AND NB_Comp = ( SELECT TOP 1 Loc_CoCode FROM dbo.STK04_Location WHERE Loc_Code = @Location )
+                                     AND NB_StepCode = @StepCode
+                                     AND NB_Button = @Button
+                                     AND NB_HasNeg = 1 "
+        cmsql.Parameters.Add("@UserCode", SqlDbType.VarChar, 4).Value = userCode.Trim
+        cmsql.Parameters.Add("@Location", SqlDbType.VarChar, 2).Value = location.Trim
+        cmsql.Parameters.Add("@StepCode", SqlDbType.VarChar, 10).Value = PhysicalCountStep
+        cmsql.Parameters.Add("@Button", SqlDbType.VarChar, 50).Value = button
 
-        Return cmsql.ExecuteScalar() Is Nothing
+        Dim result As Object = cmsql.ExecuteScalar()
+        cmsql.Parameters.Clear()
+        Return result IsNot Nothing
+
+    End Function
+
+    'The negations of the logged in user on the count of the location : {"showAvailableQty":"Y","showListDifferences":"N"}
+    'Asked again by the device when the user changes, so a count downloaded by another user follows the user logged in
+    Public Function GetPhysicalCountNegations(location As String, userCode As String) As String Implements IDataService.GetPhysicalCountNegations
+
+        Try
+
+            If String.IsNullOrWhiteSpace(location) OrElse location.Trim.Length > 2 Then Return "Error Invalid Location"
+
+            Using cnsql As New SqlConnection(DecryptString(ServerSent.lcConSql, DecPS("REDACTED")))
+
+                cnsql.Open()
+
+                Using cmsql As New SqlCommand(" ", cnsql)
+
+                    cmsql.CommandTimeout = 600
+
+                    Dim showAvailableQty As Boolean = PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonAvailableQty)
+                    Dim showListDifferences As Boolean = PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonListDifferences)
+
+                    Return $"{{""showAvailableQty"":""{IIf(showAvailableQty, "Y", "N")}"",""showListDifferences"":""{IIf(showListDifferences, "Y", "N")}""}}"
+
+                End Using
+
+            End Using
+
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
 
     End Function
 
@@ -4617,7 +4715,7 @@ Public Class DataService
 
     End Sub
 
-    Public Function GetPhysicalCountHeader(location As String, countNumber As String, machineName As String) As String Implements IDataService.GetPhysicalCountHeader
+    Public Function GetPhysicalCountHeader(location As String, countNumber As String, machineName As String, userCode As String) As String Implements IDataService.GetPhysicalCountHeader
 
         Try
 
@@ -4636,13 +4734,15 @@ Public Class DataService
                     errorMessage = GetPhysicalCountSlot(cmsql, location, countNumber, machineName, slot)
                     If errorMessage <> "" Then Return "Error " & errorMessage
 
-                    Dim showAvailableQty As Boolean = PhysicalCountShowAvailableQty(cmsql)
+                    Dim showAvailableQty As Boolean = PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonAvailableQty)
+                    Dim showListDifferences As Boolean = PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonListDifferences)
 
                     Dim linesFromWhere As String = PhysicalCountLinesFromWhere(cmsql, location)
 
                     AddPhysicalCountParameters(cmsql, location, countNumber)
                     cmsql.Parameters.Add("@Slot", SqlDbType.Int).Value = slot
                     cmsql.Parameters.Add("@ShowAvailableQty", SqlDbType.VarChar, 1).Value = IIf(showAvailableQty, "Y", "N")
+                    cmsql.Parameters.Add("@ShowListDifferences", SqlDbType.VarChar, 1).Value = IIf(showListDifferences, "Y", "N")
                     cmsql.CommandText = $" SELECT  CONVERT(VARCHAR(18), Pch_Recid) countNumber ,
                                                    Pch_Loc location ,
                                                    ISNULL(Loc_Desc, '') locationDescription ,
@@ -4656,6 +4756,7 @@ Public Class DataService
                                                    ( SELECT TOP 1 ISNULL(SP_Expiry, 'N') FROM dbo.stk04_SysParam ) expiryMode ,
                                                    ( SELECT TOP 1 ISNULL(SP_Book, 'N') FROM dbo.stk04_SysParam ) bookMode ,
                                                    @ShowAvailableQty showAvailableQty ,
+                                                   @ShowListDifferences showListDifferences ,
                                                    ( SELECT COUNT(*) {linesFromWhere} ) linesCount ,
                                                    ( SELECT COUNT(*) {PhysicalCountBarcodesFromWhere()} ) barcodesCount
                                            FROM    dbo.tbl_PhysicalCountHeader
@@ -4715,7 +4816,7 @@ Public Class DataService
     End Function
 
     'startFromRow : 1 based, rows are numbered by Pcd_RecId
-    Public Function GetPhysicalCountDetails(location As String, countNumber As String, machineName As String, startFromRow As Integer, pageSize As Integer) As String Implements IDataService.GetPhysicalCountDetails
+    Public Function GetPhysicalCountDetails(location As String, countNumber As String, machineName As String, startFromRow As Integer, pageSize As Integer, userCode As String) As String Implements IDataService.GetPhysicalCountDetails
 
         Try
 
@@ -4737,8 +4838,9 @@ Public Class DataService
                     errorMessage = GetPhysicalCountSlot(cmsql, location, countNumber, machineName, slot)
                     If errorMessage <> "" Then Return "Error " & errorMessage
 
-                    'Without the privilege the available qty is not sent at all
-                    Dim showAvailableQty As Boolean = PhysicalCountShowAvailableQty(cmsql)
+                    'Without the negations the available qty is not sent at all (List Differences needs it too)
+                    Dim showAvailableQty As Boolean = PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonAvailableQty) OrElse
+                                                      PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonListDifferences)
 
                     'slot is 1 to 6 (checked above), the column name cannot be a parameter
                     Dim countedColumn As String = "Pcd_QtyCounted" & slot.ToString
@@ -4765,6 +4867,7 @@ Public Class DataService
                                                           ELSE ISNULL(Pcd_ExpDate, '')
                                                      END expiry ,
                                                      ISNULL(Pcd_Batch, '') batch ,
+                                                     LTRIM(RTRIM(ISNULL(STK_UNIT, ''))) itemUnit ,
                                                      {IIf(showAvailableQty, "ISNULL(Pcd_Qty, 0) systemQty ,", "")}
                                                      ISNULL({countedColumn}, 0) counted
                                              {linesFromWhere} )
@@ -4983,6 +5086,137 @@ Public Class DataService
             End Using
 
             Return "Success|" & lineValues.Count.ToString
+
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
+
+    End Function
+
+    'logs : JSON array of the counting steps saved on the device (tbl_CPP_PhysicalCountLogs), sent after the lines :
+    '[{"logID":12,"lineRecID":"47842","itemRecID":"1203","qty":5,"total":17,"mode":"scanThenType","action":"add","unit":"PCS","userCode":"SU","dateStamp":"2026-10-28 09:15:02"}, ...]
+    'The count is not checked (a closed count keeps its history), a log already received (same machine, location, count, logID) is skipped
+    'Returns "Success|n" (n : the logs received)
+    Public Function SavePhysicalCountLogs(location As String, countNumber As String, machineName As String, logs As String) As String Implements IDataService.SavePhysicalCountLogs
+
+        Try
+
+            Dim errorMessage As String = ValidatePhysicalCountRequest(location, countNumber, machineName)
+            If errorMessage <> "" Then Return "Error " & errorMessage
+
+            Dim arrLogs As JArray = JArray.Parse(logs)
+
+            If arrLogs.Count = 0 Then Return "Success|0"
+            If arrLogs.Count > PhysicalCountMaxLinesPerSave Then Return $"Error Maximum {PhysicalCountMaxLinesPerSave} Logs Per Save"
+
+            Using dtLogs As New DataTable
+
+                dtLogs.Columns.Add("DeviceLogID", GetType(Integer))
+                dtLogs.Columns.Add("LineRecID", GetType(Decimal))
+                dtLogs.Columns.Add("StkID", GetType(Decimal))
+                dtLogs.Columns.Add("Qty", GetType(Decimal))
+                dtLogs.Columns.Add("Total", GetType(Decimal))
+                dtLogs.Columns.Add("Mode", GetType(String))
+                dtLogs.Columns.Add("Action", GetType(String))
+                dtLogs.Columns.Add("Unit", GetType(String))
+                dtLogs.Columns.Add("UStamp", GetType(String))
+                dtLogs.Columns.Add("DStamp", GetType(DateTime))
+
+                Dim logIDs As New HashSet(Of Integer)
+
+                For Each log As JObject In arrLogs
+
+                    Dim logID As Integer
+                    Dim lineRecID, itemRecID, qty, total As Decimal
+                    Dim dateStamp As DateTime
+
+                    If Not Integer.TryParse(log("logID")?.ToString, logID) Then Return $"Error Invalid Log {log("logID")}"
+                    If Not logIDs.Add(logID) Then Continue For
+
+                    If Not Decimal.TryParse(log("lineRecID")?.ToString, Globalization.NumberStyles.None, Globalization.CultureInfo.InvariantCulture, lineRecID) Then
+                        Return $"Error Invalid Line For Log {logID}"
+                    End If
+
+                    If Not Decimal.TryParse(log("qty")?.ToString, Globalization.NumberStyles.AllowDecimalPoint Or Globalization.NumberStyles.AllowLeadingSign, Globalization.CultureInfo.InvariantCulture, qty) _
+                        OrElse Math.Abs(qty) > 99999999999999.999D Then
+                        Return $"Error Invalid Qty For Log {logID}"
+                    End If
+
+                    If Not DateTime.TryParseExact(log("dateStamp")?.ToString, "yyyy-MM-dd HH:mm:ss", Globalization.CultureInfo.InvariantCulture, Globalization.DateTimeStyles.None, dateStamp) Then
+                        Return $"Error Invalid Date For Log {logID}"
+                    End If
+
+                    Dim row As DataRow = dtLogs.NewRow
+                    row("DeviceLogID") = logID
+                    row("LineRecID") = lineRecID
+                    row("StkID") = If(Decimal.TryParse(log("itemRecID")?.ToString, Globalization.NumberStyles.None, Globalization.CultureInfo.InvariantCulture, itemRecID), CObj(itemRecID), DBNull.Value)
+                    row("Qty") = Math.Round(qty, 3)
+                    row("Total") = If(Decimal.TryParse(log("total")?.ToString, Globalization.NumberStyles.AllowDecimalPoint Or Globalization.NumberStyles.AllowLeadingSign, Globalization.CultureInfo.InvariantCulture, total) _
+                                      AndAlso Math.Abs(total) <= 99999999999999.999D, CObj(Math.Round(total, 3)), DBNull.Value)
+                    row("Mode") = Left(If(log("mode")?.ToString, "").Trim, 20)
+                    row("Action") = Left(If(log("action")?.ToString, "").Trim, 10)
+                    row("Unit") = Left(If(log("unit")?.ToString, "").Trim, 30)
+                    row("UStamp") = Left(If(log("userCode")?.ToString, "").Trim, 4)
+                    row("DStamp") = dateStamp
+                    dtLogs.Rows.Add(row)
+
+                Next
+
+                Using cnsql As New SqlConnection(DecryptString(ServerSent.lcConSql, DecPS("REDACTED")))
+
+                    Dim trnSql As SqlTransaction = Nothing
+                    Try
+
+                        cnsql.Open()
+                        trnSql = cnsql.BeginTransaction
+
+                        Using cmsql As New SqlCommand(" CREATE TABLE #PhysicalCountLogs ( DeviceLogID INT PRIMARY KEY, LineRecID DECIMAL(18, 0) NOT NULL, StkID DECIMAL(18, 0) NULL,
+                                                                                          Qty DECIMAL(18, 3) NOT NULL, Total DECIMAL(18, 3) NULL, Mode VARCHAR(20) NOT NULL,
+                                                                                          Action VARCHAR(10) NOT NULL, Unit NVARCHAR(30) NULL, UStamp VARCHAR(4) NULL, DStamp DATETIME NOT NULL ) ",
+                                                      cnsql, trnSql)
+
+                            cmsql.CommandTimeout = 900
+                            cmsql.ExecuteNonQuery()
+
+                            Using bulkCopy As New SqlBulkCopy(cnsql, SqlBulkCopyOptions.Default, trnSql)
+                                bulkCopy.DestinationTableName = "#PhysicalCountLogs"
+                                bulkCopy.BulkCopyTimeout = 900
+                                bulkCopy.WriteToServer(dtLogs)
+                            End Using
+
+                            AddPhysicalCountParameters(cmsql, location, countNumber)
+                            cmsql.Parameters.Add("@MachineName", SqlDbType.NVarChar, 30).Value = machineName.Trim
+                            cmsql.CommandText = " INSERT INTO dbo.tbl_CPP_PhysicalCountLogs ( PCL_CountID , PCL_Location , PCL_LineRecID , PCL_StkID , PCL_Operator , PCL_Qty , PCL_Total ,
+                                                                                         PCL_Mode , PCL_Action , PCL_Unit , PCL_DeviceLogID , PCL_UStamp , PCL_DStamp )
+                                                  SELECT  @CountNumber , @Location , LineRecID , StkID , @MachineName , Qty , Total ,
+                                                          Mode , Action , NULLIF(Unit, '') , DeviceLogID , NULLIF(UStamp, '') , DStamp
+                                                  FROM    #PhysicalCountLogs Logs
+                                                  WHERE   NOT EXISTS ( SELECT 1
+                                                                       FROM   dbo.tbl_CPP_PhysicalCountLogs
+                                                                       WHERE  PCL_Operator = @MachineName
+                                                                              AND PCL_Location = @Location
+                                                                              AND PCL_CountID = @CountNumber
+                                                                              AND PCL_DeviceLogID = Logs.DeviceLogID ) ;
+                                                  DROP TABLE #PhysicalCountLogs ; "
+                            cmsql.ExecuteNonQuery()
+
+                        End Using
+
+                        trnSql.Commit()
+
+                    Catch exsv As Exception
+                        Try
+                            trnSql?.Rollback()
+                        Catch exTRN As Exception
+                        End Try
+                        Throw
+                    End Try
+
+                End Using
+
+                Return "Success|" & dtLogs.Rows.Count.ToString
+
+            End Using
 
         Catch ex As Exception
             Return "Error " & ex.Message
@@ -5360,7 +5594,7 @@ Public Class DataService
     End Sub
 
     'Brands, categories, product groups and identifications of the items that can be counted, working day, modes and privilege
-    Public Function GetPhysicalCountFilters(location As String) As String Implements IDataService.GetPhysicalCountFilters
+    Public Function GetPhysicalCountFilters(location As String, userCode As String) As String Implements IDataService.GetPhysicalCountFilters
 
         Try
 
@@ -5389,7 +5623,7 @@ Public Class DataService
                     PhysicalCountStockTables(cmsql, location, stkFil, stkQty)
 
                     Dim workingDay As Date = PhysicalCountWorkingDay(cmsql, location)
-                    Dim showAvailableQty As Boolean = PhysicalCountShowAvailableQty(cmsql)
+                    Dim showAvailableQty As Boolean = PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonAvailableQty)
 
                     cmsql.Parameters.Clear()
                     cmsql.CommandText = " SELECT TOP 1 ISNULL(SP_Book, 'N') FROM dbo.stk04_SysParam "
@@ -5457,7 +5691,7 @@ Public Class DataService
     'Returns {"totalItems":n,"selectedItems":n,"items":[...]} : the totals are counted on the first page only (-1 on the next pages),
     'selectedItems of the whole count (-1 with a search : the search does not change it, the device keeps its value)
     Public Function GetPhysicalCountItems(location As String, filters As String, selection As String, searchText As String, onlySelected As Boolean,
-                                          afterReference As String, afterItemRecID As String, pageSize As Integer, exactMatch As Boolean) As String Implements IDataService.GetPhysicalCountItems
+                                          afterReference As String, afterItemRecID As String, pageSize As Integer, exactMatch As Boolean, userCode As String) As String Implements IDataService.GetPhysicalCountItems
 
         Try
 
@@ -5497,7 +5731,7 @@ Public Class DataService
                         Dim stkFil As String = "", stkQty As String = ""
                         PhysicalCountStockTables(cmsql, location, stkFil, stkQty)
 
-                        Dim showAvailableQty As Boolean = PhysicalCountShowAvailableQty(cmsql)
+                        Dim showAvailableQty As Boolean = PhysicalCountNegation(cmsql, location, userCode, PhysicalCountButtonAvailableQty)
                         Dim consignment As String = IIf(PhysicalCountObjectExists(cmsql, "dbo.V_StockNormalCons"), "view", "").ToString
 
                         LoadPhysicalCountSelection(cnsql, Nothing, cmsql, objSelection)

@@ -7,7 +7,6 @@ import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
 import ScreenHeader from '../components/ScreenHeader';
 import DataField from '../components/controls/DataField';
-import ChoiceField, { choiceRowStyle } from '../components/controls/ChoiceField';
 import MainButton from '../components/controls/MainButton';
 import PhysicalCountData from '../data/PhysicalCountData';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
@@ -15,14 +14,22 @@ import PhysicalCountSettings from '../configuration/PhysicalCountSettings';
 import { ToMilli, FormatForUpload, CheckCountNumber, FormatQuantity } from '../variables/PhysicalCountRules';
 import MessageBox from '../components/MessageBox';
 import { MachineNameMessage } from '../configuration/MachineName';
+import { getLoginUserCode } from '../variables/LoginInfo';
 
 // Time taken by a download or an upload : "Worked for 12.4 (s)"
+// Counting steps (logs) sent per call
+const LOGS_PAGE_SIZE = 2000;
+
 const WorkedFor = (startTime) => `Worked for ${((Date.now() - startTime) / 1000).toFixed(1)} (s)`;
 
-// Physical count : download a count from the server of the selected location, count offline, then upload
+// Physical count : download a count from the server of the login screen (on its location), count offline, then upload
 const PhysicalCountScreen = props => {
 
   const [profile, setProfile] = useState(null);
+  // Description of the location of the server, and why the count is not on it (counted lines of another server to upload)
+  const [locationDescription, setLocationDescription] = useState('');
+  const [profileMessage, setProfileMessage] = useState('');
+  const shownProfileMessage = useRef('');
   const [machineName, setMachineName] = useState('');
   const [header, setHeader] = useState(null);
   const [summary, setSummary] = useState({ notCounted: 0, pending: 0, uploaded: 0, countedQty: 0 });
@@ -36,16 +43,27 @@ const PhysicalCountScreen = props => {
   // Returns what was loaded ({ profile, machineName, header, summary }), null on error
   const LoadStatus = async () => {
     try {
-      const selectedProfile = await PhysicalCountDatabase.GetSelectedProfile();
+      // The server of the login screen and its location (offline : the count already on the device)
+      const serverProfile = await PhysicalCountSettings.serverProfile();
+      const selectedProfile = serverProfile.profile;
       const loadedMachineName = await PhysicalCountSettings.machineName();
       let loadedSummary = { notCounted: 0, pending: 0, uploaded: 0, countedQty: 0 };
       let loadedHeader = null;
       setProfile(selectedProfile);
+      setLocationDescription(serverProfile.locationDescription);
+      setProfileMessage(serverProfile.message);
       setMachineName(loadedMachineName);
+
+      // Shown once, not on every visit of the page
+      if (serverProfile.message !== '' && serverProfile.message !== shownProfileMessage.current && selectedProfile) {
+        alert(serverProfile.message);
+      }
+      shownProfileMessage.current = serverProfile.message;
 
       if (selectedProfile) {
         loadedHeader = await PhysicalCountDatabase.GetHeader(selectedProfile);
         loadedSummary = await PhysicalCountDatabase.GetLinesSummary(selectedProfile);
+        if (loadedHeader) RefreshNegations(loadedHeader);
       }
       setHeader(loadedHeader);
       setSummary(loadedSummary);
@@ -55,6 +73,18 @@ const PhysicalCountScreen = props => {
       alert(error.message);
       return null;
     }
+  };
+
+  // The negations (available qty, List Differences) follow the user logged in : read again from the server
+  // when the count was downloaded by another user (offline, that user sees neither)
+  const RefreshNegations = (countHeader) => {
+    const userCode = getLoginUserCode();
+    if ((countHeader.negationUser ?? '').toUpperCase() === userCode.toUpperCase()) return;
+    PhysicalCountData.GetPhysicalCountNegations(countHeader.server, countHeader.location, userCode)
+      .then(negations => PhysicalCountDatabase.UpdateNegations(countHeader, negations, userCode))
+      .then(() => PhysicalCountDatabase.GetHeader(countHeader))
+      .then(setHeader)
+      .catch(error => console.log(error));
   };
 
   useFocusEffect(
@@ -84,7 +114,7 @@ const PhysicalCountScreen = props => {
   const BeforeDownload = () => {
 
     if (!profile) {
-      alert('Please select a location in the physical count settings');
+      alert(profileMessage !== '' ? profileMessage : 'The location of the server is not loaded, connect to the server and try again');
     }
     else if (machineName === '') {
       alert(MachineNameMessage());
@@ -166,7 +196,7 @@ const PhysicalCountScreen = props => {
 
       if (countNumber !== null) {
         const serverHeader = await PhysicalCountData.GetPhysicalCountHeader(countKey.server, countKey.location, countNumber, countMachineName);
-        await PhysicalCountDatabase.StartDownload(countKey, countMachineName, serverHeader);
+        await PhysicalCountDatabase.StartDownload(countKey, countMachineName, serverHeader, getLoginUserCode());
       }
 
       let localHeader = await PhysicalCountDatabase.GetHeader(countKey);
@@ -237,6 +267,10 @@ const PhysicalCountScreen = props => {
     if (!countReady) {
       alert('Please download the physical count first');
     }
+    else if (summary.pending === 0 && summary.pendingLogs > 0) {
+      // Only the counting history is left (the lines were uploaded)
+      RunUpload();
+    }
     else if (summary.pending === 0) {
       alert('No Counted Items Found');
     }
@@ -253,6 +287,7 @@ const PhysicalCountScreen = props => {
   // If the upload fails (connection lost, count posted or cancelled meanwhile...) nothing is saved on the server
   // and the lines stay "not uploaded" on the device, so the upload can simply be done again
   // (the totals replace the server values, sending them twice is harmless)
+  // Then the counting steps (logs) are sent by pages, a log already received is skipped by the server
   const RunUpload = async () => {
 
     const startTime = Date.now();
@@ -261,12 +296,18 @@ const PhysicalCountScreen = props => {
 
       const pendingLines = await PhysicalCountDatabase.GetPendingLines(header);
 
-      setProgress({ title: 'Upload', detail: `Sending ${pendingLines.length} Items`, percent: 0.5, cancellable: false });
+      if (pendingLines.length > 0) {
 
-      await PhysicalCountData.SavePhysicalCountLines(header.server, header.location, header.countNumber, header.machineName,
-        pendingLines.map(line => ({ lineRecID: line.lineRecID, counted: FormatForUpload(line.counted) })));
+        setProgress({ title: 'Upload', detail: `Sending ${pendingLines.length} Items`, percent: 0.5, cancellable: false });
 
-      await PhysicalCountDatabase.MarkLinesUploaded(header, pendingLines.map(line => line.lineRecID));
+        await PhysicalCountData.SavePhysicalCountLines(header.server, header.location, header.countNumber, header.machineName,
+          pendingLines.map(line => ({ lineRecID: line.lineRecID, counted: FormatForUpload(line.counted) })));
+
+        await PhysicalCountDatabase.MarkLinesUploaded(header, pendingLines.map(line => line.lineRecID));
+
+      }
+
+      await UploadLogs();
 
       setProgress(null);
       alert(`Sending Finished - Count # ${header.countNumber}\n${pendingLines.length} items total including expiries\n${WorkedFor(startTime)}`);
@@ -277,6 +318,43 @@ const PhysicalCountScreen = props => {
     }
 
     LoadStatus();
+
+  };
+
+  // Logs of the server + location : each page is sent to the count (and machine) it was counted on
+  const UploadLogs = async () => {
+
+    const totalLogs = await PhysicalCountDatabase.CountPendingLogs(header);
+    let sentLogs = 0;
+
+    while (true) {
+
+      const logs = await PhysicalCountDatabase.GetPendingLogs(header, LOGS_PAGE_SIZE);
+      if (logs.length === 0) break;
+
+      setProgress({ title: 'Upload', detail: `Sending Counting History ${sentLogs} / ${totalLogs}`, percent: totalLogs === 0 ? 1 : sentLogs / totalLogs, cancellable: false });
+
+      const first = logs[0];
+      const pageLogs = logs.filter(log => log.countNumber === first.countNumber && log.machineName === first.machineName);
+
+      await PhysicalCountData.SavePhysicalCountLogs(first.server, first.location, first.countNumber, first.machineName,
+        pageLogs.map(log => ({
+          logID: log.logID,
+          lineRecID: log.lineRecID,
+          itemRecID: log.itemRecID ?? '',
+          qty: FormatForUpload(log.qty),
+          total: log.total === null ? '' : FormatForUpload(log.total),
+          mode: log.mode,
+          action: log.action,
+          unit: log.itemUnit ?? '',
+          userCode: log.userCode ?? '',
+          dateStamp: log.dateStamp,
+        })));
+
+      await PhysicalCountDatabase.MarkLogsUploaded(pageLogs.map(log => log.logID));
+      sentLogs += pageLogs.length;
+
+    }
 
   };
 
@@ -343,28 +421,19 @@ const PhysicalCountScreen = props => {
       {/* Compact fields so everything fits on one screen, the scroll view only helps on very small screens */}
       <ScrollView>
 
-        <ChoiceField
-          title='Location'
-          value={profile ? `${profile.location}${header?.locationDescription ? ' - ' + header.locationDescription : ''}` : 'Not Selected'}
-          onPress={() => props.navigation.navigate('PhysicalCountSettings')}
-          style={{ borderRightWidth: 0 }}
-        />
-
-        <View style={choiceRowStyle.row}>
-          <View style={styles.fieldHalf}>
-            <ChoiceField
-              title='Server'
-              value={profile ? profile.server : '-'}
-              onPress={() => props.navigation.navigate('PhysicalCountSettings')}
-              style={{ borderBottomWidth: 0 }}
+        {/* The location of the server (read only), the machine is the name of the device */}
+        <View style={styles.fieldsRow}>
+          <View style={styles.fieldLocation}>
+            <DataField
+              title='Location'
+              data={profile ? `${profile.location}${(locationDescription || header?.locationDescription) ? ' - ' + (locationDescription || header.locationDescription) : ''}` : 'Not Loaded'}
             />
           </View>
-          <View style={styles.fieldHalf}>
-            <ChoiceField
+          <View style={[styles.fieldMachine, styles.fieldSeparator]}>
+            <DataField
               title='Machine'
-              value={machineName === '' ? 'Not Valid' : machineName}
-              onPress={() => props.navigation.navigate('PhysicalCountSettings')}
-              style={{ borderRightWidth: 0, borderBottomWidth: 0 }}
+              data={machineName === '' ? 'Not Valid' : machineName}
+              onPress={() => alert(PhysicalCountSettings.machineNameMessage(machineName))}
             />
           </View>
         </View>
@@ -433,8 +502,15 @@ const styles = StyleSheet.create({
   fieldsRow: {
     flexDirection: 'row',
   },
-  fieldHalf: {
-    width: '50%',
+  fieldLocation: {
+    flex: 2,
+  },
+  fieldMachine: {
+    flex: 1,
+  },
+  fieldSeparator: {
+    borderLeftWidth: 1,
+    borderLeftColor: 'silver',
   },
   linesRow: {
     flexDirection: 'row',

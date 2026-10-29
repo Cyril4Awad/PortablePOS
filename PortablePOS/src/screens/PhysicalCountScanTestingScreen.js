@@ -11,8 +11,9 @@ import MessageBox from '../components/MessageBox';
 import PhysicalCountDifferences from '../components/lists/physicalCount/PhysicalCountDifferences';
 import PhysicalCountItemPicker from '../components/lists/physicalCount/PhysicalCountItemPicker';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
+import { getLoginUserCode } from '../variables/LoginInfo';
 import { PlayScanOk, PlayScanError, PlayQtyConfirmed } from '../variables/PhysicalCountSounds';
-import { FormatQuantity, LookupScan, LineFields, CodeDescription } from '../variables/PhysicalCountRules';
+import { FormatQuantity, LookupScan, LineFields, CodeDescription, NegationAllowed } from '../variables/PhysicalCountRules';
 import {
     MODES, MODE_LABELS, MODE_DESCRIPTIONS, DEFAULT_SETTINGS, MAX_QUICK_BUTTONS, ClassifyFormat, IsScannedInput, QtyFromText, QtyError,
     CreateSession, KnowLine, AddEntry, SetTotal, StartPending, ConfirmPending,
@@ -115,7 +116,7 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
             if (modeRef.current === MODES.SCAN_THEN_TYPE && QtyError(qtyTextRef.current) !== '') return;
             const typed = modeRef.current === MODES.SCAN_THEN_TYPE && ClassifyFormat(qtyTextRef.current) === 'quantity' ? QtyFromText(qtyTextRef.current) : undefined;
             const result = ConfirmPending(current, typed);
-            if (result.save) PhysicalCountDatabase.SaveLineCounted(countKey, result.save.lineRecID, result.save.counted).catch(error => console.log(error));
+            if (result.save) PhysicalCountDatabase.SaveLineCounted(countKey, result.save.lineRecID, result.save.counted, StepLog(result)).catch(error => console.log(error));
         };
 
     }, []);
@@ -181,11 +182,17 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
     // Typed quantity of the scan then type box (undefined when it is not a number)
     const TypedQty = () => ClassifyFormat(qtyTextRef.current) === 'quantity' ? QtyFromText(qtyTextRef.current) : undefined;
 
+    // The log of a saved counting step (PC_Logs) : the added qty, or the typed total of a Set Total
+    const StepLog = (result) => {
+        const last = result.session.lastEntry;
+        return { qty: last?.qty ?? result.save.counted, mode: modeRef.current, action: last?.kind ?? 'add', userCode: getLoginUserCode() };
+    };
+
     // Saves a counting step on the downloaded count, feedback
     const ApplyResult = async (result) => {
         setSession(result.session);
         if (result.save) {
-            await PhysicalCountDatabase.SaveLineCounted(countKey, result.save.lineRecID, result.save.counted);
+            await PhysicalCountDatabase.SaveLineCounted(countKey, result.save.lineRecID, result.save.counted, StepLog(result));
             setLine(current => current && current.lineRecID === result.save.lineRecID ? { ...current, counted: result.save.counted, state: 1 } : current);
             PlayQtyConfirmed();
             Vibration.vibrate(15);
@@ -404,10 +411,14 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
 
     const HandleUndo = () => {
         enqueue(async () => {
-            const result = Undo(sessionRef.current, describeLine);
+            const before = sessionRef.current;
+            const result = Undo(before, describeLine);
             setSession(result.session);
             if (result.restore) {
-                await PhysicalCountDatabase.RestoreLineCounted(countKey, result.restore.lineRecID, result.restore.counted, result.restore.state);
+                // logged with the change of the total (negative when an added qty is undone)
+                const undoneTotal = before.counts[result.restore.lineRecID] ?? 0;
+                await PhysicalCountDatabase.RestoreLineCounted(countKey, result.restore.lineRecID, result.restore.counted, result.restore.state,
+                    { qty: result.restore.counted - undoneTotal, mode: modeRef.current, action: 'undo', userCode: getLoginUserCode() });
                 setLine(current => current && current.lineRecID === result.restore.lineRecID
                     ? { ...current, counted: result.restore.counted, state: result.restore.state } : current);
             }
@@ -510,12 +521,12 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
                 onClose={() => { setDifferencesVisible(false); focusField(scanRef); }}
             />
 
-            {/* Mode : tap to change, List Differences at its right with the available qty privilege */}
+            {/* Mode : tap to change, List Differences at its right with the List Differences negation */}
             <View style={styles.optionsContainer}>
                 <TouchableOpacity style={[styles.modeButton, { flex: 1 }]} onPress={() => setModePickerVisible(true)}>
                     <Text style={styles.modeButtonText} numberOfLines={1}>Mode : {MODE_LABELS[mode]} ▾</Text>
                 </TouchableOpacity>
-                {header?.showAvailableQty === 'Y' ?
+                {NegationAllowed(header, 'showListDifferences') ?
                     <TouchableOpacity style={[styles.modeButton, { marginLeft: 5 }]} onPress={() => setDifferencesVisible(true)}>
                         <Text style={styles.modeButtonText} numberOfLines={1}>List Differences</Text>
                     </TouchableOpacity> :

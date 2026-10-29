@@ -1,6 +1,9 @@
 import ServerInfo from "../configuration/ServerInfo";
 import { getLoginUserCode } from "../variables/LoginInfo";
 import DeviceInfo from "react-native-device-info";
+import { callService } from "./ServiceCall";
+
+const SALES_ORDERS_TIMEOUT_MS = 120000;
 
 const GetSalesOrders = (
     { setSalesOrdersData },
@@ -8,27 +11,13 @@ const GetSalesOrders = (
     { setIsLoading },
     { setError }) => {
 
-    ServerInfo.serverURL().then((serverURL) => {
+    ServerInfo.serverIP().then((serverIP) => {
 
         setIsLoading(true);
 
-        fetch(serverURL + 'GetSalesOrders',
-            {
-                method: 'POST',
-                headers: {
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json',
-                    token : DeviceInfo.getDeviceNameSync() + "|" + DeviceInfo.getDeviceId() + "_" + DeviceInfo.getUniqueIdSync()
-                },
-                body: JSON.stringify({
-                    //userCode: userCode
-                })
-            },
-        )
-            .then(response => response.json())
-            .then(results => {
-
-                var strResult = results.GetSalesOrdersResult;
+        // The list of the server can take long (all the orders not invoiced) : the user is told instead of waiting without end
+        callService(serverIP, 'GetSalesOrders', {}, SALES_ORDERS_TIMEOUT_MS, 'The server is taking too long to list the sales orders, please try again')
+            .then(strResult => {
 
                 if (strResult == '') {
                     setSalesOrdersData([]);

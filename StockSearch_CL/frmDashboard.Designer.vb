@@ -28,6 +28,8 @@ Partial Class frmDashboard
         Me.btnPotentialClients = New System.Windows.Forms.Button()
         Me.Panel1 = New System.Windows.Forms.Panel()
         Me.btnMissingItems = New System.Windows.Forms.Button()
+        Me.btnUserPrivilege = New System.Windows.Forms.Button()
+        Me.btnNegations = New System.Windows.Forms.Button()
         Me.pnlContainer = New System.Windows.Forms.Panel()
         CType(Me.PictureBox2, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.Panel1.SuspendLayout()
@@ -81,6 +83,8 @@ Partial Class frmDashboard
         'Panel1
         '
         Me.Panel1.BackColor = System.Drawing.Color.White
+        Me.Panel1.Controls.Add(Me.btnNegations)
+        Me.Panel1.Controls.Add(Me.btnUserPrivilege)
         Me.Panel1.Controls.Add(Me.btnMissingItems)
         Me.Panel1.Controls.Add(Me.btnPotentialClients)
         Me.Panel1.Dock = System.Windows.Forms.DockStyle.Top
@@ -107,6 +111,44 @@ Partial Class frmDashboard
         Me.btnMissingItems.Text = "Missing Items"
         Me.btnMissingItems.TextAlign = System.Drawing.ContentAlignment.MiddleRight
         Me.btnMissingItems.UseVisualStyleBackColor = True
+        '
+        'btnUserPrivilege
+        '
+        Me.btnUserPrivilege.FlatAppearance.BorderColor = System.Drawing.Color.White
+        Me.btnUserPrivilege.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(CType(CType(8, Byte), Integer), CType(CType(98, Byte), Integer), CType(CType(170, Byte), Integer))
+        Me.btnUserPrivilege.FlatAppearance.MouseOverBackColor = System.Drawing.Color.Silver
+        Me.btnUserPrivilege.FlatStyle = System.Windows.Forms.FlatStyle.Flat
+        Me.btnUserPrivilege.Font = New System.Drawing.Font("Tahoma", 10.0!)
+        Me.btnUserPrivilege.ForeColor = System.Drawing.Color.FromArgb(CType(CType(8, Byte), Integer), CType(CType(98, Byte), Integer), CType(CType(170, Byte), Integer))
+        Me.btnUserPrivilege.Image = CType(resources.GetObject("btnPotentialClients.Image"), System.Drawing.Image)
+        Me.btnUserPrivilege.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft
+        Me.btnUserPrivilege.Location = New System.Drawing.Point(350, 5)
+        Me.btnUserPrivilege.Name = "btnUserPrivilege"
+        Me.btnUserPrivilege.Padding = New System.Windows.Forms.Padding(0, 0, 5, 0)
+        Me.btnUserPrivilege.Size = New System.Drawing.Size(167, 51)
+        Me.btnUserPrivilege.TabIndex = 453
+        Me.btnUserPrivilege.Text = "User Privilege"
+        Me.btnUserPrivilege.TextAlign = System.Drawing.ContentAlignment.MiddleRight
+        Me.btnUserPrivilege.UseVisualStyleBackColor = True
+        '
+        'btnNegations
+        '
+        Me.btnNegations.FlatAppearance.BorderColor = System.Drawing.Color.White
+        Me.btnNegations.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(CType(CType(8, Byte), Integer), CType(CType(98, Byte), Integer), CType(CType(170, Byte), Integer))
+        Me.btnNegations.FlatAppearance.MouseOverBackColor = System.Drawing.Color.Silver
+        Me.btnNegations.FlatStyle = System.Windows.Forms.FlatStyle.Flat
+        Me.btnNegations.Font = New System.Drawing.Font("Tahoma", 10.0!)
+        Me.btnNegations.ForeColor = System.Drawing.Color.FromArgb(CType(CType(8, Byte), Integer), CType(CType(98, Byte), Integer), CType(CType(170, Byte), Integer))
+        Me.btnNegations.Image = CType(resources.GetObject("btnMissingItems.Image"), System.Drawing.Image)
+        Me.btnNegations.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft
+        Me.btnNegations.Location = New System.Drawing.Point(523, 5)
+        Me.btnNegations.Name = "btnNegations"
+        Me.btnNegations.Padding = New System.Windows.Forms.Padding(0, 0, 5, 0)
+        Me.btnNegations.Size = New System.Drawing.Size(167, 51)
+        Me.btnNegations.TabIndex = 454
+        Me.btnNegations.Text = "Negations"
+        Me.btnNegations.TextAlign = System.Drawing.ContentAlignment.MiddleRight
+        Me.btnNegations.UseVisualStyleBackColor = True
         '
         'pnlContainer
         '
@@ -148,4 +190,6 @@ Partial Class frmDashboard
     Friend WithEvents Panel1 As Windows.Forms.Panel
     Friend WithEvents pnlContainer As Windows.Forms.Panel
     Friend WithEvents btnMissingItems As Windows.Forms.Button
+    Friend WithEvents btnUserPrivilege As Windows.Forms.Button
+    Friend WithEvents btnNegations As Windows.Forms.Button
 End Class

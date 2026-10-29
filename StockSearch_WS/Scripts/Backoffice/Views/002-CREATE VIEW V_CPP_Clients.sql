@@ -1,7 +1,7 @@
 SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
-ALTER VIEW V_CPP_Clients
+CREATE OR ALTER VIEW V_CPP_Clients
 AS
     SELECT  CL_RecID [clientRecID] ,
             CONCAT(CL_Code, ' - ', CL_No) [clientCode] ,

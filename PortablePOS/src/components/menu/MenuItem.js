@@ -45,7 +45,8 @@ const MenuItem = props => {
 
 const styles = StyleSheet.create({
     container: {
-        width: Sizing.isTablet ? Sizing.windowsWidth / 2 : Sizing.isPortableScanner ? Sizing.windowsWidth : 395,
+        // never wider than the screen (a wider item shifts the whole menu to the right)
+        width: Sizing.isTablet ? Sizing.windowsWidth / 2 : Sizing.isPortableScanner ? Sizing.windowsWidth : Math.min(395, Sizing.windowsWidth),
         height: Sizing.isTablet ? 150 : 130,
         alignItems: 'center',
         justifyContent: 'center',

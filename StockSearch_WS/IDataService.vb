@@ -295,7 +295,12 @@ Public Interface IDataService
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
-    Function GetPhysicalCountHeader(location As String, countNumber As String, machineName As String) As String
+    Function GetUserPrivileges(userCode As String) As String
+
+    <OperationContract>
+    <FaultContract(GetType(String))>
+    <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
+    Function GetPhysicalCountHeader(location As String, countNumber As String, machineName As String, userCode As String) As String
 
     <OperationContract>
     <FaultContract(GetType(String))>
@@ -305,7 +310,7 @@ Public Interface IDataService
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
-    Function GetPhysicalCountDetails(location As String, countNumber As String, machineName As String, startFromRow As Integer, pageSize As Integer) As String
+    Function GetPhysicalCountDetails(location As String, countNumber As String, machineName As String, startFromRow As Integer, pageSize As Integer, userCode As String) As String
 
     <OperationContract>
     <FaultContract(GetType(String))>
@@ -320,12 +325,22 @@ Public Interface IDataService
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
-    Function GetPhysicalCountFilters(location As String) As String
+    Function SavePhysicalCountLogs(location As String, countNumber As String, machineName As String, logs As String) As String
 
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
-    Function GetPhysicalCountItems(location As String, filters As String, selection As String, searchText As String, onlySelected As Boolean, afterReference As String, afterItemRecID As String, pageSize As Integer, exactMatch As Boolean) As String
+    Function GetPhysicalCountFilters(location As String, userCode As String) As String
+
+    <OperationContract>
+    <FaultContract(GetType(String))>
+    <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
+    Function GetPhysicalCountItems(location As String, filters As String, selection As String, searchText As String, onlySelected As Boolean, afterReference As String, afterItemRecID As String, pageSize As Integer, exactMatch As Boolean, userCode As String) As String
+
+    <OperationContract>
+    <FaultContract(GetType(String))>
+    <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
+    Function GetPhysicalCountNegations(location As String, userCode As String) As String
 
     <OperationContract>
     <FaultContract(GetType(String))>

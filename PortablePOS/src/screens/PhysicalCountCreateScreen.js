@@ -7,7 +7,7 @@ import { FontSize } from '../variables/ResponsiveFont';
 import ScreenHeader from '../components/ScreenHeader';
 import ModalTitle from '../components/ModalTitle';
 import DataField from '../components/controls/DataField';
-import ChoiceField, { choiceRowStyle } from '../components/controls/ChoiceField';
+import { choiceRowStyle } from '../components/controls/ChoiceField';
 import TextBoxField from '../components/controls/TextBoxField';
 import MainButton from '../components/controls/MainButton';
 import LoadingData from '../components/LoadingData';
@@ -25,7 +25,7 @@ import {
 
 // Create Physical Count, step 1 : filters, like the count module of the ERP
 // The brands, categories, product groups and identifications check their items (the items are chosen on the next screen)
-// The count is created for the location and the machine of the physical count settings
+// The count is created on the server of the login screen, for the location of that server and the machine (name of the device)
 const PhysicalCountCreateScreen = props => {
 
   const [profile, setProfile] = useState(null);
@@ -54,13 +54,16 @@ const PhysicalCountCreateScreen = props => {
 
     try {
 
-      const selectedProfile = await PhysicalCountDatabase.GetSelectedProfile();
+      // The server of the login screen and its location
+      const serverProfile = await PhysicalCountSettings.serverProfile();
+      const selectedProfile = serverProfile.message === '' ? serverProfile.profile : null;
       setProfile(selectedProfile);
       setMachineName(await PhysicalCountSettings.machineName());
 
       if (!selectedProfile) {
         setServerData(null);
         setDeviceCountNumber(null);
+        setErrorText(serverProfile.message !== '' ? serverProfile.message : 'The location of the server is not loaded, connect to the server and try again');
         return;
       }
 
@@ -87,7 +90,7 @@ const PhysicalCountCreateScreen = props => {
     if (props.route.params?.groupsRemovedAt) setFilters(current => WithoutGroups(current));
   }, [props.route.params?.groupsRemovedAt]);
 
-  // Reload when coming back from the settings
+  // Reload on every visit (the server of the login screen may have changed)
   useFocusEffect(
     useCallback(() => {
       LoadFilters();
@@ -97,7 +100,7 @@ const PhysicalCountCreateScreen = props => {
   const ShowItems = () => {
 
     if (!profile) {
-      alert('Please select a location in the physical count settings');
+      alert(errorText !== '' ? errorText : 'The location of the server is not loaded, connect to the server and try again');
     }
     else if (machineName === '') {
       alert(MachineNameMessage());
@@ -123,7 +126,7 @@ const PhysicalCountCreateScreen = props => {
   const OpenMyCounts = () => {
 
     if (!profile) {
-      alert('Please select a location in the physical count settings');
+      alert(errorText !== '' ? errorText : 'The location of the server is not loaded, connect to the server and try again');
     }
     else if (machineName === '') {
       alert(MachineNameMessage());
@@ -225,20 +228,18 @@ const PhysicalCountCreateScreen = props => {
 
       <View>
 
-        <ChoiceField
+        {/* The location of the server (read only), the machine is the name of the device */}
+        <DataField
           title='Location'
-          value={profile ? `${profile.location}${serverData?.locationDescription ? ' - ' + serverData.locationDescription : ''}` : 'Not Selected'}
-          onPress={() => props.navigation.navigate('PhysicalCountSettings')}
-          style={{ borderRightWidth: 0 }}
+          data={profile ? `${profile.location}${serverData?.locationDescription ? ' - ' + serverData.locationDescription : ''}` : 'Not Loaded'}
         />
 
         <View style={choiceRowStyle.row}>
           <View style={styles.fieldHalf}>
-            <ChoiceField
+            <DataField
               title='Machine'
-              value={machineName === '' ? 'Not Valid' : machineName}
-              onPress={() => props.navigation.navigate('PhysicalCountSettings')}
-              style={{ borderBottomWidth: 0 }}
+              data={machineName === '' ? 'Not Valid' : machineName}
+              onPress={() => alert(PhysicalCountSettings.machineNameMessage(machineName))}
             />
           </View>
           <View style={styles.fieldHalf}>

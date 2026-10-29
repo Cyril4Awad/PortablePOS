@@ -58,7 +58,60 @@ const GetControlizedMenu = (
 
 };
 
-//menuItems : [{ recKey, menuActive }]
+// Last privileges read from the server per user, used when the device is offline
+const privilegesStorageKey = userCode => '@app_userPrivileges_' + userCode.trim().toUpperCase();
+
+//Returns { stepCode: { allowed, privTill } } of the logged in user from tbl_CPP_UserPriv (User Privilege tab of the backend),
+//or from the device when the server cannot be reached ({} when never downloaded : nothing allowed)
+const GetUserPrivileges = (
+    { setPrivileges }) => {
+
+    const userCode = getLoginUserCode();
+
+    ServerInfo.serverIP().then((serverIP) => {
+
+        callService(serverIP, 'GetUserPrivileges', { userCode: userCode }, 5000)
+            .then(strResult => {
+
+                var privileges = {};
+                JSON.parse(strResult).forEach(item => {
+                    privileges[item.stepCode.trim()] = {
+                        // The bit can come as "1" / "0", and "0" would be truthy
+                        allowed: item.allowed === true || String(item.allowed).trim() === '1' || String(item.allowed).trim().toLowerCase() === 'true',
+                        privTill: (item.privTill ?? '').trim(),
+                    };
+                });
+
+                AsyncStorage.setItem(privilegesStorageKey(userCode), JSON.stringify(privileges));
+                setPrivileges(privileges);
+
+            })
+            .catch(() => {
+
+                AsyncStorage.getItem(privilegesStorageKey(userCode))
+                    .then(strPrivileges => setPrivileges(strPrivileges == null ? {} : JSON.parse(strPrivileges)))
+                    .catch(() => setPrivileges({}));
+
+            });
+
+    }).catch((error) => {
+        console.log(error)
+    });
+
+};
+
+// The super user can use everything, the others need an allowed row whose date is not over (privTill "" = no end)
+export const IsAllowed = (privileges, recKey) => {
+    if (getLoginUserCode().trim().toUpperCase() === 'SU') return true;
+    const privilege = privileges[recKey];
+    if (!privilege || !privilege.allowed) return false;
+    if (privilege.privTill === '') return true;
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    return privilege.privTill >= today;
+};
+
+//menuItems : [{ recKey, menuActive, title }]
 const SaveControlizedMenu = (
     menuItems,
     { setIsLoading },
@@ -107,4 +160,5 @@ const SaveControlizedMenu = (
 export default {
     GetControlizedMenu: GetControlizedMenu,
     SaveControlizedMenu: SaveControlizedMenu,
+    GetUserPrivileges: GetUserPrivileges,
 }

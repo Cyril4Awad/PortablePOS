@@ -70,6 +70,9 @@ const PotentialClientsScreen = props => {
 
             </Modal>
 
+            {/* Scrolls on the short screens so the buttons stay reachable */}
+            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps='handled'>
+
             <ScreenHeader
                 description='Request adding a new Client Account'
                 imageSource={require('../assets/icons/potentialClient.png')}
@@ -204,6 +207,8 @@ const PotentialClientsScreen = props => {
 
             </View>
 
+            </ScrollView>
+
         </View>
     );
 };
@@ -212,6 +217,8 @@ const styles = StyleSheet.create({
     container: {
         backgroundColor: Colors.bgColor,
         height: '100%',
+    },
+    scrollContent: {
         padding: 10,
     },
     buttonsContainer: {

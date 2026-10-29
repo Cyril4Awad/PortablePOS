@@ -85,7 +85,7 @@ const FreeReceivingSettingsScreen = () => {
         <View style={styles.formContainer}>
 
           <TextBoxField
-            title='Server (without http://)'
+            title='Server (IP, or https://name)'
             value={server}
             maxLength={100}
             multiline={false}

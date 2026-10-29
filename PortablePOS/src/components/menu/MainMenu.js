@@ -8,7 +8,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Sizing from '../../variables/Sizing';
 import { getCashRegisterCode } from '../../variables/CashierInfo';
 import LoadingData from '../LoadingData';
-import MenuData from '../../data/MenuData';
+import MenuData, { IsAllowed } from '../../data/MenuData';
 import { CheckServer, LastIsOnline } from '../../variables/ConnectionStatus';
 
 // menuActive here is only the fallback, the effective value comes from tbl_CPP_ControlizedMenu
@@ -267,10 +267,11 @@ export const STEPS = [
     },
 ];
 
-// Main menu steps that are active (menu items) plus the headers that still have active items
-export const getVisibleSteps = menuActiveKeys => {
+// Main menu steps that are active (menu items) and allowed to the user, plus the headers that still have items
+// privileges : null = not checked (Menu Items screen)
+export const getVisibleSteps = (menuActiveKeys, privileges = null) => {
 
-    const isActive = item => menuActiveKeys[item.recKey] ?? item.menuActive;
+    const isActive = item => (menuActiveKeys[item.recKey] ?? item.menuActive) && (privileges === null || IsAllowed(privileges, item.recKey));
 
     const activeItems = STEPS.filter(item => item.type === 'MI' && isActive(item));
 
@@ -285,6 +286,8 @@ export const getVisibleSteps = menuActiveKeys => {
 const MainMenu = props => {
 
     const [menuActiveKeys, setMenuActiveKeys] = useState(null);
+    // User privileges (tbl_CPP_UserPriv), the menu shows only the items the user is allowed to use
+    const [privileges, setPrivileges] = useState(null);
 
     useEffect(() => {
         LogBox.ignoreLogs(['VirtualizedLists should never be nested']);
@@ -303,6 +306,7 @@ const MainMenu = props => {
                     }
                 }
             );
+            MenuData.GetUserPrivileges({ setPrivileges });
         }, [])
     );
 
@@ -398,7 +402,7 @@ Connect to the network of the server and try again. Only Free Receiving and Phys
         );
     }
 
-    if (menuActiveKeys === null) {
+    if (menuActiveKeys === null || privileges === null) {
         return (
             <View style={styles.loadingContainer}>
                 <LoadingData />
@@ -406,7 +410,15 @@ Connect to the network of the server and try again. Only Free Receiving and Phys
         );
     }
 
-    const visibleSteps = getVisibleSteps(menuActiveKeys);
+    const visibleSteps = getVisibleSteps(menuActiveKeys, privileges);
+
+    if (visibleSteps.length === 0) {
+        return (
+            <View style={styles.loadingContainer}>
+                <Text style={styles.noPrivilegeText}>{'No menu items are allowed for this user.\nAsk the administrator to give you the privileges.'}</Text>
+            </View>
+        );
+    }
 
     if (Sizing.isTablet) {
         return (
@@ -461,6 +473,13 @@ const styles = StyleSheet.create({
     loadingContainer: {
         flex: 1,
         width: '100%',
+    },
+    noPrivilegeText: {
+        marginTop: 40,
+        paddingHorizontal: 20,
+        textAlign: 'center',
+        fontSize: 16,
+        color: Colors.brandBlue,
     },
     tabletFLContainer: {
         flex: 1,

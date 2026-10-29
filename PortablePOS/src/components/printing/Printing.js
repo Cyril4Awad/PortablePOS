@@ -7,7 +7,9 @@ const PrintSlipReport = async (text) => {
 
     //BluetoothEscposPrinter.printAndFeed(5)
 
-    PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT).then(async (result) => {
+    // Asked only when printing (Android 12 and later), the screens do not ask it when they open
+    // The result is not checked : Android 11 has no such permission
+    PermissionsAndroid.requestMultiple([PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT, PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN]).then(async (result) => {
 
   
 

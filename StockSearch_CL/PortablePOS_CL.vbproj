@@ -50,11 +50,11 @@
   <ItemGroup>
     <Reference Include="C1.Common, Version=1.0.20031.116, Culture=neutral, PublicKeyToken=e272bb32d11b1948">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\ERP_Test\ERP Solution\POSOperations\ERP_DLL\C1.Common.dll</HintPath>
+      <HintPath>bin\Debug\C1.Common.dll</HintPath>
     </Reference>
     <Reference Include="C1.Win.C1Input, Version=1.0.20031.0, Culture=neutral, PublicKeyToken=7e7ff60f0c214f9a">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\ERP_Test\ERP Solution\POSOperations\ERP_DLL\C1.Win.C1Input.dll</HintPath>
+      <HintPath>bin\Debug\C1.Win.C1Input.dll</HintPath>
     </Reference>
     <Reference Include="C1.Win.C1TrueDBGrid.4, Version=4.0.20201.416, Culture=neutral, PublicKeyToken=75ae3fb0e2b1e0da, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
@@ -63,10 +63,6 @@
     <Reference Include="ApplicationsDesign, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\SimpleTest\ApplicationsDesign.dll</HintPath>
-    </Reference>
-    <Reference Include="StockSearch_CL, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>bin\Debug\StockSearch_CL.dll</HintPath>
     </Reference>
     <Reference Include="DevComponents.DotNetBar2, Version=12.2.0.0, Culture=neutral, PublicKeyToken=7eb7c3a35b91de04, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
@@ -139,6 +135,21 @@
     <Compile Include="UserControls\cntPotentialClients.vb">
       <SubType>UserControl</SubType>
     </Compile>
+    <Compile Include="UserControls\frmDuplicatePrivilege.vb">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UserControls\cntNegations.Designer.vb">
+      <DependentUpon>cntNegations.vb</DependentUpon>
+    </Compile>
+    <Compile Include="UserControls\cntNegations.vb">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="UserControls\cntUserPrivilege.Designer.vb">
+      <DependentUpon>cntUserPrivilege.vb</DependentUpon>
+    </Compile>
+    <Compile Include="UserControls\cntUserPrivilege.vb">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="UserControls\cntUploadsHistory.Designer.vb">
       <DependentUpon>cntUploadsHistory.vb</DependentUpon>
     </Compile>
@@ -201,6 +212,9 @@
   </ItemGroup>
   <ItemGroup>
     <Service Include="{94E38DFF-614B-4CBD-B67C-F211BB35CE8B}" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="DLL\ApplicationsDesign.dll" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
 </Project>

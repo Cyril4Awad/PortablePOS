@@ -2,7 +2,7 @@ SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
 
-CREATE VIEW V_CPP_ItemImages
+CREATE OR ALTER VIEW V_CPP_ItemImages
 AS
     SELECT  DSTech_RecId [itemRecID] ,
             DSTech_BMP [itemImage]

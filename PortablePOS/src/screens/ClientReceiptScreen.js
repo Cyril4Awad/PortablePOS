@@ -64,20 +64,8 @@ const ClientReceiptScreen = props => {
   const [selectedClientName, setSelectedClientName] = useState('');
   const [selectedClientPriceCat, setSelectedClientPriceCat] = useState('');
 
+  // The bluetooth permission is asked when printing (Printing.PrintSlipReport), not when the page opens
   useEffect( () => {
-  
-    const granted =  PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-    {
-      title: 'BLUETOOTH_SCAN',
-      message: 'Can we access your bluetooth?',
-      buttonNeutral: 'Ask Me Later',
-      buttonNegative: 'Cancel',
-      buttonPositive: 'OK',
-      },
-    );
-
-    console.log(granted)
 
     return (() => {
       //Cleanup

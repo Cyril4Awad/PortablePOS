@@ -82,6 +82,10 @@ Partial Class cntUploadsHistory
         Me.txtStartDate.AllowDrop = True
         Me.txtStartDate.BackColor = System.Drawing.Color.White
         Me.txtStartDate.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle
+        '
+        '
+        '
+        Me.txtStartDate.Calendar.Name = ""
         Me.txtStartDate.DateTimeInput = False
         Me.txtStartDate.EditMask = "99/99/9999"
         Me.txtStartDate.EmptyAsNull = True
@@ -91,7 +95,7 @@ Partial Class cntUploadsHistory
         Me.txtStartDate.Location = New System.Drawing.Point(155, 76)
         Me.txtStartDate.MaxLength = 10
         Me.txtStartDate.Name = "txtStartDate"
-        Me.txtStartDate.Size = New System.Drawing.Size(118, 18)
+        Me.txtStartDate.Size = New System.Drawing.Size(118, 20)
         Me.txtStartDate.TabIndex = 0
         Me.txtStartDate.Tag = Nothing
         Me.txtStartDate.TextAlign = System.Windows.Forms.HorizontalAlignment.Center
@@ -100,6 +104,10 @@ Partial Class cntUploadsHistory
         '
         Me.txtEndDate.BackColor = System.Drawing.Color.White
         Me.txtEndDate.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle
+        '
+        '
+        '
+        Me.txtEndDate.Calendar.Name = ""
         Me.txtEndDate.DateTimeInput = False
         Me.txtEndDate.EditMask = "99/99/9999"
         Me.txtEndDate.EmptyAsNull = True
@@ -109,7 +117,7 @@ Partial Class cntUploadsHistory
         Me.txtEndDate.Location = New System.Drawing.Point(323, 76)
         Me.txtEndDate.MaxLength = 10
         Me.txtEndDate.Name = "txtEndDate"
-        Me.txtEndDate.Size = New System.Drawing.Size(120, 18)
+        Me.txtEndDate.Size = New System.Drawing.Size(120, 20)
         Me.txtEndDate.TabIndex = 1
         Me.txtEndDate.Tag = Nothing
         Me.txtEndDate.TextAlign = System.Windows.Forms.HorizontalAlignment.Center
@@ -187,6 +195,7 @@ Partial Class cntUploadsHistory
         CType(Me.txtEndDate, System.ComponentModel.ISupportInitialize).EndInit()
         CType(Me.LstHist, System.ComponentModel.ISupportInitialize).EndInit()
         Me.ResumeLayout(False)
+        Me.PerformLayout()
 
     End Sub
 

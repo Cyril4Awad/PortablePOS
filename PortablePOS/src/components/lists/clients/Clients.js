@@ -204,7 +204,7 @@ const Clients = props => {
           if (typeof props.setSelectedClientRecID !== 'undefined') {
             setSelectedClientRecId(clientData.item.clientRecID)
             setSelectedClientName(clientData.item.clientName)
-            setClientStatemeneModalVisible(true);
+            setClientStatementModalVisible(true);
           }
         }}
         onGeoLocationPress={() => {

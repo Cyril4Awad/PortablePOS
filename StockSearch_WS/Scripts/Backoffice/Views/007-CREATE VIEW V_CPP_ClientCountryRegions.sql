@@ -2,7 +2,7 @@ SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 GO
 
-ALTER VIEW V_CPP_ClientCountryRegions
+CREATE OR ALTER VIEW V_CPP_ClientCountryRegions
 AS
     SELECT  CONCAT(Cou_CouCode, ' / ', Cou_RegCode) [clientCountryRegionsCode] ,
             CONCAT(Cou_CouName, ' / ', Cou_RegName) [clientCountryRegionsDesc]

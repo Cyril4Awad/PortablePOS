@@ -2,7 +2,7 @@ SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
 
-CREATE FUNCTION dbo.F_CPP_VatValue
+CREATE OR ALTER FUNCTION dbo.F_CPP_VatValue
     (
       @Amount NUMERIC(18, 3) ,
       @LocationCode VARCHAR(2) ,

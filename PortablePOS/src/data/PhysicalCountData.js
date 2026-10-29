@@ -1,20 +1,21 @@
 import { callService } from './ServiceCall';
+import { getLoginUserCode } from '../variables/LoginInfo';
 
-// The physical count calls the server of the selected profile (each location can be on another server),
-// not the server of the login screen
+// The physical count calls the server of the login screen, on the location of that server (LocCode of its web.config),
+// the downloaded count keeps the server + location it was downloaded from
 
 // Create a count : the lists answer in a second when the server is free, they never keep the user waiting without end
 const LIST_TIMEOUT_MS = 90000;
 const CREATE_TIMEOUT_MS = 180000;
 
-// Connection test of the settings : resolves with the location description, rejects when the server
-// cannot be reached in time, the service is not installed or the location does not exist on that server
-const CheckPhysicalCountLocation = (server, location, timeoutMs = 8000) => {
+// Location of the server : { location, locationDescription }, from "01 - Warehouse Zouk Mosbeh"
+const GetServerLocation = (server, timeoutMs = 8000) => {
 
-    return Promise.race([
-        callService(server, 'CheckPhysicalCountLocation', { location: location }),
-        new Promise((resolve, reject) => setTimeout(() => reject(new Error('No response from the server')), timeoutMs)),
-    ]);
+    return callService(server, 'GetLocationPretty', {}, timeoutMs, 'No response from the server')
+        .then(strResult => {
+            const [locationCode, ...description] = strResult.split(' - ');
+            return { location: locationCode.trim().toUpperCase(), locationDescription: description.join(' - ').trim() };
+        });
 
 };
 
@@ -23,7 +24,8 @@ const GetPhysicalCountHeader = (server, location, countNumber, machineName) => {
     return callService(server, 'GetPhysicalCountHeader', {
         location: location,
         countNumber: countNumber,
-        machineName: machineName
+        machineName: machineName,
+        userCode: getLoginUserCode()
     })
         .then(strResult => JSON.parse(strResult)[0]);
 
@@ -37,7 +39,8 @@ const GetPhysicalCountDetails = (server, location, countNumber, machineName, sta
         countNumber: countNumber,
         machineName: machineName,
         startFromRow: startFromRow,
-        pageSize: pageSize
+        pageSize: pageSize,
+        userCode: getLoginUserCode()
     })
         .then(strResult => strResult == '' ? [] : JSON.parse(strResult));
 
@@ -56,6 +59,14 @@ const GetPhysicalCountBarcodes = (server, location, countNumber, machineName, st
 
 };
 
+// Negations of the logged in user on the count of the location (tbl_CPP_NegationButton) : { showAvailableQty, showListDifferences } ('Y' / 'N')
+const GetPhysicalCountNegations = (server, location, userCode, timeoutMs = 8000) => {
+
+    return callService(server, 'GetPhysicalCountNegations', { location: location, userCode: userCode }, timeoutMs)
+        .then(strResult => JSON.parse(strResult));
+
+};
+
 // lines : [{ lineRecID, counted }] - counted is the absolute total (replaces the server value)
 const SavePhysicalCountLines = (server, location, countNumber, machineName, lines) => {
 
@@ -68,13 +79,26 @@ const SavePhysicalCountLines = (server, location, countNumber, machineName, line
 
 };
 
+// logs : [{ logID, lineRecID, itemRecID, qty, total, mode, action, unit, userCode, dateStamp }] - the counting steps (tbl_CPP_PhysicalCountLogs)
+// a log sent twice is saved once on the server
+const SavePhysicalCountLogs = (server, location, countNumber, machineName, logs) => {
+
+    return callService(server, 'SavePhysicalCountLogs', {
+        location: location,
+        countNumber: countNumber,
+        machineName: machineName,
+        logs: JSON.stringify(logs)
+    });
+
+};
+
 //#region Create a count
 
 // { location, locationDescription, workingDay, bookMode, showAvailableQty, brands, categories, productGroups, identifications }
 // each list : [{ code, description }]
 const GetPhysicalCountFilters = (server, location) => {
 
-    return callService(server, 'GetPhysicalCountFilters', { location: location }, LIST_TIMEOUT_MS)
+    return callService(server, 'GetPhysicalCountFilters', { location: location, userCode: getLoginUserCode() }, LIST_TIMEOUT_MS)
         .then(strResult => JSON.parse(strResult));
 
 };
@@ -96,7 +120,8 @@ const GetPhysicalCountItems = (server, location, filters, selection, searchText,
         afterReference: after ? after.itemReference : '',
         afterItemRecID: after ? after.itemRecID : '',
         pageSize: pageSize,
-        exactMatch: exactMatch
+        exactMatch: exactMatch,
+        userCode: getLoginUserCode()
     }, LIST_TIMEOUT_MS)
         .then(strResult => JSON.parse(strResult));
 
@@ -140,9 +165,11 @@ export default {
     GetPhysicalCountItems: GetPhysicalCountItems,
     CreatePhysicalCount: CreatePhysicalCount,
     GetMachinePhysicalCounts: GetMachinePhysicalCounts,
-    CheckPhysicalCountLocation: CheckPhysicalCountLocation,
+    GetServerLocation: GetServerLocation,
     GetPhysicalCountHeader: GetPhysicalCountHeader,
     GetPhysicalCountDetails: GetPhysicalCountDetails,
     GetPhysicalCountBarcodes: GetPhysicalCountBarcodes,
     SavePhysicalCountLines: SavePhysicalCountLines,
+    SavePhysicalCountLogs: SavePhysicalCountLogs,
+    GetPhysicalCountNegations: GetPhysicalCountNegations,
 }

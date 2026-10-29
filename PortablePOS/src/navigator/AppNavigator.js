@@ -23,7 +23,6 @@ import ViewDefineCashScreen from './../screens/ViewDefineCashScreen';
 import PhysicalCountScreen from './../screens/PhysicalCountScreen';
 import PhysicalCountScanScreen from './../screens/PhysicalCountScanScreen';
 import PhysicalCountItemsScreen from './../screens/PhysicalCountItemsScreen';
-import PhysicalCountSettingsScreen from './../screens/PhysicalCountSettingsScreen';
 import PhysicalCountScanTestingScreen from './../screens/PhysicalCountScanTestingScreen';
 import PhysicalCountCreateScreen from './../screens/PhysicalCountCreateScreen';
 import PhysicalCountCreateItemsScreen from './../screens/PhysicalCountCreateItemsScreen';
@@ -118,14 +117,6 @@ const AppNavigator = (params) => {
                     component={PhysicalCountItemsScreen}
                     options={({ navigation }) => ({
                         title: 'Physical Count - Items',
-                        ...BackArrowOptions(navigation),
-                    })} />
-
-                <Stack.Screen
-                    name='PhysicalCountSettings'
-                    component={PhysicalCountSettingsScreen}
-                    options={({ navigation }) => ({
-                        title: 'Physical Count - Settings',
                         ...BackArrowOptions(navigation),
                     })} />
 

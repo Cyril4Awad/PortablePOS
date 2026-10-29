@@ -76,6 +76,10 @@ const LoginScreen = props => {
                 } else if (strResult === 'UAL') {
                     setLoginUserName('');
                     alert('User already logged in');
+                } else if (strResult === 'UNR') {
+                    // The device is not in tbl_CPP_Devices, or Register Device was not pressed on it
+                    setLoginUserName('');
+                    alert(`This device (${DeviceInfo.getDeviceNameSync()}) is not registered on the server.\n\nAsk the administrator to add it, then press Register Device.`);
                 }
                 else {
 
@@ -347,6 +351,8 @@ const styles = StyleSheet.create({
         color: 'white',
         width: '85%',
         height: '100%',
+        // the default padding of Android text inputs cuts the text from the top when the box is short
+        paddingVertical: 0,
         borderColor: Colors.brandBlue,
         //borderWidth: 2,
         //borderRadius: 3,
