@@ -57,3 +57,6 @@ Desktop.ini
 # Signing keys (keep debug.keystore if your team relies on it locally)
 *.keystore
 !**/debug.keystore
+
+# Server installers (large binaries, kept locally only)
+Installers/

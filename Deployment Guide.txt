@@ -1,0 +1,58 @@
+DEPLOYMENT GUIDE - Portable POS
+
+--- SERVER: DATABASE ---
+1. Open SQL Server Management Studio and connect to the client's ERP database.
+2. Run every script in the folder Scripts\Backoffice\Tables in number order.
+3. Run every script in the folder Scripts\Backoffice\Views in number order.
+4. Run every script in the folder Scripts\Backoffice\Functions in number order.
+5. Run every script in the folder Scripts\Backoffice\Procedures in number order.
+6. Do not run anything from the folder "StandAlone - Not Used".
+
+--- SERVER: WEB SERVICE ---
+7. On the server, open "Turn Windows features on or off".
+8. Turn on Internet Information Services (IIS).
+9. Turn on ASP.NET 4.x and WCF Services > HTTP Activation.
+10. Install the Crystal Reports runtime on the server (needed for Reprint Documents). From the Installers folder.
+11. Install BarTender on the server if the client will use Print Label. From the Installers folder.
+12. Copy the published web service folder to the server (for example C:\inetpub\wwwroot\PortablePOS_WS).
+13. Open IIS Manager.
+14. Right-click Default Web Site and choose Add Application.
+15. Set the alias to exactly PortablePOS_WS.
+16. Set the physical path to the folder you copied.
+17. Choose an application pool that runs .NET CLR v4.0.
+18. Open Web.config in the web service folder.
+19. Set AppConnectionString to the encrypted connection string of the client's database.
+20. Set CompCode to the client's company code.
+21. Set LocCode to the client's location code.
+22. Set ReportsFolder to the folder on the server that holds the ERP Crystal reports.
+23. Set LabelPrinterName and LabelOffsetXMM if the client uses Print Label.
+24. Save Web.config.
+25. Open Windows Firewall on the server and allow incoming connections on port 80.
+26. On the server, open a browser at http://localhost/PortablePOS_WS/DataService.svc and check that the service page appears.
+
+--- PORTABLE DEVICE ---
+27. Connect the portable to the same network (Wi-Fi) as the server.
+28. On the portable, open Settings > About phone and write down the Device name.
+29. In SQL, open the script Tables\008-CREATE TABLE [dbo].[tbl_CPP_Devices].sql.
+30. Put the device name in @DeviceName and run the script.
+31. Copy the APK file to the portable.
+32. Open the APK on the portable and allow installing from unknown sources if asked.
+33. Install the app.
+34. Open the app.
+35. On the login screen, press the server button and enter the server IP address.
+36. Press Register Device.
+37. Allow the permissions the app asks for (Bluetooth / Nearby devices, camera, location).
+
+--- USER ACCESS ---
+38. In the ERP, open the Portable POS Dashboard.
+39. Open the User Privilege tab.
+40. Choose the user.
+41. Tick the menu items that user is allowed to open on the portable.
+42. Set a Clear Date if the access should expire, or leave it empty for unlimited access.
+43. Save.
+44. Open the Negations tab if the user needs extra count actions (Show Available Qty, List Differences), then tick them for that user and company and save.
+
+--- TEST ---
+45. On the portable, log in with the user's ERP code and password.
+46. Check that the menu shows only the items you allowed for that user.
+47. Check that the footer shows Online.
