@@ -12,6 +12,7 @@ import SalesOrderQtyLine from './SalesOrderQtyLine';
 import LoadingData from '../../LoadingData';
 import ServerError from '../../ServerError';
 import SwitchButtonField from '../../controls/SwitchButtonField';
+import { useScanWithoutEnter } from '../../../variables/ScanInput';
 
 const SalesOrderScanner = props => {
 
@@ -23,6 +24,7 @@ const SalesOrderScanner = props => {
     const [ordersDetailedQty, setOrdersDetailedQty] = useState([]);
 
     const [scanner, setScanner] = useState('');
+    const scanWithoutEnter = useScanWithoutEnter(() => SubmitScanner());
     const [qty, setQty] = useState('1');
 
     const scannerInputControl = useRef();
@@ -95,6 +97,30 @@ const SalesOrderScanner = props => {
         );
     };
 
+    const SubmitScanner = () => {
+
+        if (skipLine) {
+
+            SalesOrdersData.SaveSalesOrderDetailedQty(
+                props.selectedHRecid,
+                '',
+                '',
+                scanner,
+                { setScanner },
+                qty,
+                { setQty },
+                '1',
+                { setOrdersDetailedQty },
+                { setIsLoading },
+                { setError });
+
+        }
+        else {
+            qtyInputControl.current.focus()
+        }
+
+    };
+
     return (
         <View style={styles.container}>
 
@@ -138,7 +164,7 @@ const SalesOrderScanner = props => {
                             ref={scannerInputControl}
                             style={styles.detailsDataEntryScanner}
                             value={scanner}
-                            onChangeText={setScanner}
+                            onChangeText={text => { scanWithoutEnter.watch(text, scanner); setScanner(text); }}
                             showSoftInputOnFocus={false}
                             onPressIn={() => Keyboard.dismiss()}
                             placeholder='Scan Item'
@@ -148,27 +174,8 @@ const SalesOrderScanner = props => {
                             autoFocus={true}
                             blurOnSubmit={!skipLine}
                             onSubmitEditing={() => {
-
-                                if (skipLine) {
-                                    
-                                    SalesOrdersData.SaveSalesOrderDetailedQty(
-                                        props.selectedHRecid,
-                                        '',
-                                        '',
-                                        scanner,
-                                        { setScanner },
-                                        qty,
-                                        { setQty },
-                                        '1',
-                                        { setOrdersDetailedQty },
-                                        { setIsLoading },
-                                        { setError });
-
-                                }
-                                else {
-                                    qtyInputControl.current.focus()
-                                }
-
+                                scanWithoutEnter.cancel();
+                                SubmitScanner();
                             }}
 
                         />

@@ -410,6 +410,16 @@ Public Interface IDataService
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
+    Function SaveFreeReceiving(userCode As String, receivingOrders As String) As String
+
+    <OperationContract>
+    <FaultContract(GetType(String))>
+    <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
+    Function GetReceivingLots(afterRecID As String, pageSize As Integer) As String
+
+    <OperationContract>
+    <FaultContract(GetType(String))>
+    <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
     Function GetTransferLocations() As String
 
     <OperationContract>

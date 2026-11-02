@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Keyboard, Vibration, Image, FlatList, ScrollView, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Keyboard, Vibration, Image, FlatList, ScrollView, Modal, ActivityIndicator, unstable_batchedUpdates } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Colors from '../variables/Colors';
 import { FontSize } from '../variables/ResponsiveFont';
@@ -14,11 +14,16 @@ import TransferData from '../data/TransferData';
 import TransferSettings from '../configuration/TransferSettings';
 import { MachineNameMessage } from '../configuration/MachineName';
 import { PlayScanOk, PlayScanError, PlayQtyConfirmed } from '../variables/PhysicalCountSounds';
+import { useScanWithoutEnter } from '../variables/ScanInput';
 import MessageBox from '../components/MessageBox';
 import {
   ONE, LIST_LIMIT, LotText, FormatQuantity, ItemOfRows,
   CheckTransferQty, CheckLineQty, ParseTransferQty,
 } from '../variables/TransferRules';
+
+// The message when there is nothing to tell, the title of the messages of Save Transfer
+const READY_TEXT = 'Ready to scan';
+const SAVE_TITLE = 'Save Transfer';
 
 // Transfer on one screen : the header folds away (from location = the one of the server of the login, machine = name of the device,
 // the way of work and the destination), under it the scan and the items
@@ -45,11 +50,12 @@ const TransferScanScreen = () => {
   const [lines, setLines] = useState([]);
 
   const [scanText, setScanText] = useState('');
+  const scanWithoutEnter = useScanWithoutEnter(() => HandleScan());
   const [searchVisible, setSearchVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [typing, setTyping] = useState(false);
 
-  const [status, setStatus] = useState({ text: 'Ready to scan', isError: false });
+  const [status, setStatus] = useState({ text: READY_TEXT, isError: false });
 
   // Multiple locations : the lot being dispatched and the typed qty of each destination
   const [current, setCurrent] = useState(null);
@@ -64,6 +70,9 @@ const TransferScanScreen = () => {
   const [lotPick, setLotPick] = useState(null);
 
   const scanRef = useRef();
+  const listRef = useRef();
+  // The height of a line (one location : all the lines have the same), measured on the first one : the list scrolls exactly to a line
+  const [rowHeight, setRowHeight] = useState(0);
   const queue = useRef(Promise.resolve());
 
   // One location : the qty box of each line, the line whose qty box gets the focus after the next load,
@@ -140,25 +149,40 @@ const TransferScanScreen = () => {
 
   //#region Loading
 
+  // The header, the summary and the lines read together and shown in one render
   const Reload = async () => {
-    setHeader(await TransferDatabase.GetHeader());
-    setSummary(await TransferDatabase.GetSummary());
-    const loadedLines = await TransferDatabase.GetLines('', LIST_LIMIT);
-    setLines(loadedLines);
+    const [loadedHeader, loadedSummary, loadedLines] = await Promise.all([
+      TransferDatabase.GetHeader(), TransferDatabase.GetSummary(), TransferDatabase.GetLines('', LIST_LIMIT)]);
+    unstable_batchedUpdates(() => {
+      setHeader(loadedHeader);
+      setSummary(loadedSummary);
+      setLines(loadedLines);
+    });
     return loadedLines;
   };
 
   // The qty box of the requested line gets the focus once the list shows it (the whole qty selected)
+  // A line far in a long transfer is not drawn : the list scrolls to it first
   useEffect(() => {
     const lineID = focusLineRequest.current;
     if (lineID === null) return;
     focusLineRequest.current = null;
-    setTimeout(() => {
+    const index = multiple ? -1 : lines.findIndex(row => row.lineID === lineID);
+    if (index >= 0 && !lineQtyRefs.current[lineID]) listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.3 });
+    // tried again while the row is being drawn (a long scroll)
+    const focusLine = (attemptsLeft) => {
       const input = lineQtyRefs.current[lineID];
-      if (!input) return;
+      if (!input) {
+        if (index >= 0) listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.3 });
+        if (attemptsLeft > 0) setTimeout(() => focusLine(attemptsLeft - 1), 200);
+        return;
+      }
+      // drawn : exactly on its row (the first scroll of a long list is an estimate), then the focus
+      if (index >= 0) listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.3 });
       if (input.isFocused()) input.blur();
-      setTimeout(() => lineQtyRefs.current[lineID]?.focus(), 30);
-    }, 80);
+      setTimeout(() => lineQtyRefs.current[lineID]?.focus(), 120);
+    };
+    setTimeout(() => focusLine(6), 80);
   }, [lines]);
 
   // The server of the settings is the one of the location we transfer from
@@ -202,11 +226,17 @@ const TransferScanScreen = () => {
       machineName: await TransferSettings.machineName(),
     };
     setSettings(loadedSettings);
+    // The transfer on the device is shown at once, then the server is read (locations, available qty) and it is shown again
+    const ShowLocal = async () => {
+      const loadedInfo = await TransferDatabase.GetInfo();
+      setInfo(loadedInfo);
+      setDestinations(loadedInfo ? await TransferDatabase.GetDestinations(loadedInfo.location) : []);
+      await Reload();
+      return loadedInfo;
+    };
+    await ShowLocal();
     const serverError = await RefreshFromServer(loadedSettings);
-    const loadedInfo = await TransferDatabase.GetInfo();
-    setInfo(loadedInfo);
-    setDestinations(loadedInfo ? await TransferDatabase.GetDestinations(loadedInfo.location) : []);
-    await Reload();
+    const loadedInfo = await ShowLocal();
 
     if (serverError === null) {
       setHeaderOpen(true);
@@ -226,7 +256,7 @@ const TransferScanScreen = () => {
       showStatus('Choose the location to transfer to');
       setDestinationPickerVisible(true);
     }
-    else showStatus('Ready to scan');
+    else showStatus(READY_TEXT);
   };
 
   useFocusEffect(
@@ -256,6 +286,13 @@ const TransferScanScreen = () => {
   };
 
   const showStatus = (text, isError = false) => setStatus({ text, isError });
+
+  // A message stays 3.5 seconds (pressed : shown in full), then the ready message comes back
+  useEffect(() => {
+    if (status.text === READY_TEXT) return;
+    const timer = setTimeout(() => setStatus({ text: READY_TEXT, isError: false }), 3500);
+    return () => clearTimeout(timer);
+  }, [status]);
 
   // focus = false : the focus stays where it is (a qty box being typed)
   const ShowError = (text, focus = true) => {
@@ -372,8 +409,7 @@ const TransferScanScreen = () => {
       if (!check.ok) { ShowError(`${item.itemReference} : ${check.message}`); return; }
       const total = await TransferDatabase.AddLotQty(item, lot, header.destination, ONE);
       // its qty box gets the focus : the qty is typed, Enter goes back to the scan
-      const loadedLines = await TransferDatabase.GetLines('', LIST_LIMIT);
-      focusLineRequest.current = loadedLines.find(row => row.lotRecID === lot.lotRecID)?.lineID ?? null;
+      focusLineRequest.current = await TransferDatabase.GetLineID(lot.lotRecID, header.destination);
       await Reload();
       Confirmed(`${item.itemReference} = ${FormatQuantity(total)} : type the qty, then Enter (Avlb ${FormatQuantity(lot.lotAvailable)})`);
       return;
@@ -679,11 +715,11 @@ const TransferScanScreen = () => {
       }
       if (itemsWithNoAvlQty !== '') {
         ShowError('Exist Items With No Available Quantity');
-        MessageBox.alert('Transfer Stock To Location/s', 'Exist Items With No Available Quantity :\n' + itemsWithNoAvlQty, [{ text: 'OK', onPress: focusScan }]);
+        MessageBox.alert(SAVE_TITLE, 'Exist Items With No Available Quantity :\n' + itemsWithNoAvlQty, [{ text: 'OK', onPress: focusScan }]);
         return;
       }
 
-      MessageBox.alert('Transfer Stock To Location/s', `Confirm And Send Transfer${multiple ? 's' : ''} ?`, [
+      MessageBox.alert(SAVE_TITLE, `Confirm And Send Transfer${multiple ? 's' : ''} ?`, [
         { text: 'No', style: 'cancel', onPress: focusScan },
         { text: 'Yes', onPress: () => SendTransfer(allLines) },
       ]);
@@ -701,13 +737,13 @@ const TransferScanScreen = () => {
         await TransferDatabase.CompleteSave();
         await Reload();
         Confirmed('Transfer sent');
-        MessageBox.alert('Transfer Stock To Location/s',
+        MessageBox.alert(SAVE_TITLE,
           'Transfer Sent To Sync Server Successfully \n# ' + result.transfers.map(transfer => `${transfer.transferID} (${transfer.destination})`).join(' '),
           [{ text: 'OK', onPress: focusScan }]);
       }
       catch (error) {
         ShowError('The transfer is not saved', false);
-        MessageBox.alert('Transfer Stock To Location/s', error.message, [{ text: 'OK', onPress: focusScan }]);
+        MessageBox.alert(SAVE_TITLE, error.message, [{ text: 'OK', onPress: focusScan }]);
       }
       finally {
         setSaving(false);
@@ -774,7 +810,7 @@ const TransferScanScreen = () => {
   //#region Render
 
   const LineRow = ({ item: line }) => (
-    <View style={styles.lineContainer}>
+    <View style={styles.lineContainer} onLayout={rowHeight === 0 ? event => setRowHeight(event.nativeEvent.layout.height + styles.lineContainer.marginBottom) : undefined}>
       <View style={styles.lineTextContainer}>
         <Text style={styles.lineReferenceText} numberOfLines={1}>{line.itemReference}</Text>
         <Text style={styles.lineDescriptionText} numberOfLines={1}>{line.itemDescription}</Text>
@@ -1058,8 +1094,8 @@ const TransferScanScreen = () => {
           autoCorrect={false}
           blurOnSubmit={false}
           maxLength={100}
-          onChangeText={setScanText}
-          onSubmitEditing={HandleScan}
+          onChangeText={text => { scanWithoutEnter.watch(text, scanText); setScanText(text); }}
+          onSubmitEditing={() => { scanWithoutEnter.cancel(); HandleScan(); }}
         />
         <TouchableOpacity style={[styles.keyboardButton, typing ? styles.keyboardButtonOn : null]} onPress={() => {
           const next = !typing;
@@ -1073,7 +1109,8 @@ const TransferScanScreen = () => {
 
       {/* tap : the whole message */}
       <TouchableOpacity style={[styles.statusContainer, { backgroundColor: status.isError ? 'red' : Colors.brandBlue }]}
-        onPress={() => MessageBox.alert('Message', status.text, [{ text: 'OK' }])}>
+        disabled={status.text === READY_TEXT}
+        onPress={() => MessageBox.alert(status.isError ? 'Error' : 'Message', status.text, [{ text: 'OK' }])}>
         <Text style={styles.statusText} numberOfLines={1}>{status.text}</Text>
       </TouchableOpacity>
 
@@ -1082,6 +1119,7 @@ const TransferScanScreen = () => {
         // Multiple locations : the items of the transfer, tap one to change its qty in every location
         // One list for both (re-created when the way of work changes, nothing clipped) : two lists switched crashed on Android
         <FlatList
+          ref={listRef}
           key={multiple ? 'multiple' : 'one'}
           style={styles.list}
           data={multiple ? transferLots : lines}
@@ -1089,6 +1127,16 @@ const TransferScanScreen = () => {
           renderItem={multiple ? TransferLotRow : LineRow}
           keyboardShouldPersistTaps='handled'
           removeClippedSubviews={false}
+          // a long transfer : only the rows around the screen are drawn (every message redraws them)
+          windowSize={5}
+          getItemLayout={!multiple && rowHeight > 0 ? (data, index) => ({ length: rowHeight, offset: rowHeight * index, index }) : undefined}
+          // rows of different heights : near the row first, then exactly on it once it is drawn
+          onScrollToIndexFailed={({ index, averageItemLength }) => {
+            listRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+            setTimeout(() => listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.3 }), 100);
+          }}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
           ListEmptyComponent={<Text style={styles.emptyText}>{multiple ? 'Scan an item, then type its qty for each location' : 'Scan the items to transfer'}</Text>}
         /> :
           // Multiple locations : the scanned lot and the qty of each destination

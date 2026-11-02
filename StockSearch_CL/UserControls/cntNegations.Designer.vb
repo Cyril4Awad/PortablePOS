@@ -22,6 +22,7 @@ Partial Class cntNegations
     'Do not modify it using the code editor.
     <System.Diagnostics.DebuggerStepThrough()> _
     Private Sub InitializeComponent()
+        Dim resources As System.ComponentModel.ComponentResourceManager = New System.ComponentModel.ComponentResourceManager(GetType(cntNegations))
         Me.LstUsers = New C1.Win.C1TrueDBGrid.C1TrueDBGrid()
         Me.LstForms = New C1.Win.C1TrueDBGrid.C1TrueDBGrid()
         Me.LstButtons = New C1.Win.C1TrueDBGrid.C1TrueDBGrid()
@@ -44,15 +45,13 @@ Partial Class cntNegations
         Me.LstUsers.AllowFilter = False
         Me.LstUsers.AllowRowSizing = C1.Win.C1TrueDBGrid.RowSizingEnum.None
         Me.LstUsers.AllowSort = False
-        Me.LstUsers.AlternatingRows = False
         Me.LstUsers.Anchor = CType((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Bottom), System.Windows.Forms.AnchorStyles)
         Me.LstUsers.BackColor = System.Drawing.Color.White
-        Me.LstUsers.CaptionHeight = 17
         Me.LstUsers.EmptyRows = True
-        Me.LstUsers.ExtendRightColumn = False
         Me.LstUsers.FilterBar = True
         Me.LstUsers.Font = New System.Drawing.Font("Microsoft Sans Serif", 8.25!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
         Me.LstUsers.GroupByCaption = "Drag a column header here to group by that column"
+        Me.LstUsers.Images.Add(CType(resources.GetObject("LstUsers.Images"), System.Drawing.Image))
         Me.LstUsers.Location = New System.Drawing.Point(6, 131)
         Me.LstUsers.MultiSelect = C1.Win.C1TrueDBGrid.MultiSelectEnum.None
         Me.LstUsers.Name = "LstUsers"
@@ -66,6 +65,7 @@ Partial Class cntNegations
         Me.LstUsers.TabIndex = 2
         Me.LstUsers.Text = "C1TrueDBGrid1"
         Me.LstUsers.UseCompatibleTextRendering = False
+        Me.LstUsers.PropBag = resources.GetString("LstUsers.PropBag")
         '
         'LstForms
         '
@@ -74,14 +74,12 @@ Partial Class cntNegations
         Me.LstForms.AllowFilter = False
         Me.LstForms.AllowRowSizing = C1.Win.C1TrueDBGrid.RowSizingEnum.None
         Me.LstForms.AllowSort = False
-        Me.LstForms.AlternatingRows = False
         Me.LstForms.Anchor = CType((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Bottom), System.Windows.Forms.AnchorStyles)
         Me.LstForms.BackColor = System.Drawing.Color.White
-        Me.LstForms.CaptionHeight = 17
         Me.LstForms.EmptyRows = True
-        Me.LstForms.ExtendRightColumn = False
         Me.LstForms.Font = New System.Drawing.Font("Microsoft Sans Serif", 8.25!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
         Me.LstForms.GroupByCaption = "Drag a column header here to group by that column"
+        Me.LstForms.Images.Add(CType(resources.GetObject("LstForms.Images"), System.Drawing.Image))
         Me.LstForms.Location = New System.Drawing.Point(306, 131)
         Me.LstForms.MultiSelect = C1.Win.C1TrueDBGrid.MultiSelectEnum.None
         Me.LstForms.Name = "LstForms"
@@ -95,6 +93,7 @@ Partial Class cntNegations
         Me.LstForms.TabIndex = 3
         Me.LstForms.Text = "C1TrueDBGrid2"
         Me.LstForms.UseCompatibleTextRendering = False
+        Me.LstForms.PropBag = resources.GetString("LstForms.PropBag")
         '
         'LstButtons
         '
@@ -103,15 +102,12 @@ Partial Class cntNegations
         Me.LstButtons.AllowFilter = False
         Me.LstButtons.AllowRowSizing = C1.Win.C1TrueDBGrid.RowSizingEnum.None
         Me.LstButtons.AllowSort = False
-        Me.LstButtons.AllowUpdateOnBlur = True
-        Me.LstButtons.AlternatingRows = False
         Me.LstButtons.Anchor = CType((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Bottom), System.Windows.Forms.AnchorStyles)
         Me.LstButtons.BackColor = System.Drawing.Color.White
-        Me.LstButtons.CaptionHeight = 17
         Me.LstButtons.EmptyRows = True
-        Me.LstButtons.ExtendRightColumn = False
         Me.LstButtons.Font = New System.Drawing.Font("Microsoft Sans Serif", 8.25!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
         Me.LstButtons.GroupByCaption = "Drag a column header here to group by that column"
+        Me.LstButtons.Images.Add(CType(resources.GetObject("LstButtons.Images"), System.Drawing.Image))
         Me.LstButtons.Location = New System.Drawing.Point(606, 131)
         Me.LstButtons.MultiSelect = C1.Win.C1TrueDBGrid.MultiSelectEnum.None
         Me.LstButtons.Name = "LstButtons"
@@ -125,6 +121,7 @@ Partial Class cntNegations
         Me.LstButtons.TabIndex = 4
         Me.LstButtons.Text = "C1TrueDBGrid3"
         Me.LstButtons.UseCompatibleTextRendering = False
+        Me.LstButtons.PropBag = resources.GetString("LstButtons.PropBag")
         '
         'LabelX1
         '
@@ -200,7 +197,7 @@ Partial Class cntNegations
         '
         'btnSave
         '
-        Me.btnSave.Anchor = CType(System.Windows.Forms.AnchorStyles.Bottom, System.Windows.Forms.AnchorStyles)
+        Me.btnSave.Anchor = System.Windows.Forms.AnchorStyles.Bottom
         Me.btnSave.BackColor = System.Drawing.Color.FromArgb(CType(CType(8, Byte), Integer), CType(CType(98, Byte), Integer), CType(CType(170, Byte), Integer))
         Me.btnSave.Cursor = System.Windows.Forms.Cursors.Hand
         Me.btnSave.FlatAppearance.BorderSize = 0

@@ -14,8 +14,12 @@ import ROChoiceModal from '../components/lists/receivingOrder/ROChoiceModal';
 import RODateModal from '../components/lists/receivingOrder/RODateModal';
 import { ConfirmAndSave, SavingModal, MeasTotalsTable, LineConsQty } from '../components/lists/receivingOrder/ROSave';
 import ReceivingOrderData from '../data/ReceivingOrderData';
-import { useReceivingOrderDraft, UpdateDraft, ClearDraft, SetLines, NextID } from '../variables/ReceivingOrderDraft';
+import FreeReceivingSource from '../data/FreeReceivingSource';
+import FreeReceivingItemPicker from '../components/lists/freeReceiving/FreeReceivingItemPicker';
+import { FreeSave } from '../components/lists/freeReceiving/FreeReceivingSave';
+import { useReceivingOrderDraft, UpdateDraft as UpdateDraftOf, ClearDraft as ClearDraftOf, SetLines as SetLinesOf, NextID } from '../variables/ReceivingOrderDraft';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
+import { useScanWithoutEnter } from '../variables/ScanInput';
 import { MODE_TITLES, STATUS_LABELS, FormatISODate, FormatQty, Plural, LineQty, LineIssue, LineBarcodes, isLotItem, VatLabel, FormatCost, LineCost, TodayISO } from '../variables/ReceivingOrderRules';
 import MessageBox from '../components/MessageBox';
 
@@ -34,10 +38,18 @@ const READY_TEXT = '';
 // finds them by description too. Every item opens the line editor, which comes back here
 // New : the location is the one of the service (LocCode of its Web.config), it cannot change. Modify : new lines, only the actual date changes
 // Cancel and View : read only. route.params.view : the receiving order viewed (the one being prepared stays)
+// route.params.free : the receiving order of Free Receiving (its own draft), the stock of the server online, the stock file downloaded offline,
+// saved on the device and uploaded (at once when online)
 const ReceivingOrderEditScreen = ({ navigation, route }) => {
 
     const view = !!route.params?.view;
-    const draft = useReceivingOrderDraft(view);
+    const free = !!route.params?.free;
+    const draft = useReceivingOrderDraft(free ? 'FREE' : view);
+    const data = free ? FreeReceivingSource : ReceivingOrderData;
+    const UpdateDraft = (changes) => UpdateDraftOf(changes, free ? 'FREE' : 'RO');
+    const SetLines = (change) => SetLinesOf(change, free ? 'FREE' : 'RO');
+    const ClearDraft = (viewed = false) => ClearDraftOf(free ? 'FREE' : viewed);
+    const homeScreen = free ? 'FreeReceiving' : 'ReceivingOrder';
 
     const [headerOpen, setHeaderOpen] = useState(() => !!draft && draft.mode === 'ADD' && draft.lines.length === 0);
     const [supplierPickerVisible, setSupplierPickerVisible] = useState(false);
@@ -47,6 +59,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
     const [refWarning, setRefWarning] = useState('');
 
     const [scanText, setScanText] = useState('');
+    const scanWithoutEnter = useScanWithoutEnter(() => HandleScan());
     const [typing, setTyping] = useState(false);
     const [status, setStatus] = useState({ text: READY_TEXT, isError: false });
     const [searchChoiceVisible, setSearchChoiceVisible] = useState(false);
@@ -74,10 +87,13 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
 
     useEffect(() => {
         if (!draft) return;
-        navigation.setOptions({ title: MODE_TITLES[draft.mode] + (draft.roRecID ? ` #${draft.roRecID}` : '') });
+        navigation.setOptions({
+            title: free ? (draft.mode === 'VIEW' ? `Free Receiving - RO # ${draft.roRecID}` : draft.orderID ? 'Free Receiving - Saved On The Device' : 'Free Receiving')
+                : MODE_TITLES[draft.mode] + (draft.roRecID ? ` #${draft.roRecID}` : ''),
+        });
         // A new RO receives to the location of the service
         if (isNew && !draft.location) {
-            ReceivingOrderData.GetLocations()
+            data.GetLocations()
                 .then(rows => {
                     if (rows.length > 0) UpdateDraft({ location: rows[0] });
                     else setStatus({ text: 'The location of the server is not a receiving location', isError: true });
@@ -93,6 +109,27 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         return () => clearTimeout(timer);
     }, [status, readyText]);
 
+    // Free Receiving : an item picked in the stock file of View Items (route.params.pickItem), looked up once the supplier and location are there
+    const [pendingPick, setPendingPick] = useState(null);
+    const pickRef = useRef(null);
+    useEffect(() => {
+        const pick = route.params?.pickItem;
+        if (!free || !pick || !draft) return;
+        navigation.setParams({ pickItem: undefined });
+        setPendingPick(pick);
+        if (!draft.supplier) {
+            setHeaderOpen(true);
+            setSupplierPickerVisible(true);
+            setStatus({ text: `Choose the supplier to receive ${pick.itemReference}`, isError: false });
+        }
+    }, [route.params?.pickItem]);
+    useEffect(() => {
+        if (!pendingPick || !draft?.supplier || !draft?.location) return;
+        const pick = pendingPick;
+        setPendingPick(null);
+        pickRef.current?.(pick);
+    }, [pendingPick, draft?.supplier, draft?.location]);
+
     // Back from the line editor : the ready message and the scan gets the focus (not when the screen opens : nothing has it)
     const opened = useRef(false);
     useEffect(() => navigation.addListener('focus', () => {
@@ -106,7 +143,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         return (
             <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>{view ? 'No receiving order is opened' : 'No receiving order is being prepared'}</Text>
-                <MainButton title='Back' imageSource={require('../assets/icons/close.png')} onPress={() => navigation.navigate('ReceivingOrder')} />
+                <MainButton title='Back' imageSource={require('../assets/icons/close.png')} onPress={() => navigation.navigate(homeScreen)} />
             </View>
         );
     }
@@ -139,7 +176,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
     const CheckRef = () => {
         const reference = draft.roRef.trim();
         if (reference === '') { setRefWarning(''); return; }
-        ReceivingOrderData.RefExists(reference)
+        data.RefExists(reference)
             .then(exists => setRefWarning(exists ? 'Already used, change it' : ''))
             .catch(() => setRefWarning(''));
     };
@@ -171,7 +208,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         }
         setSearching(true);
         setStatus({ text: 'Loading the purchase orders...', isError: false });
-        ReceivingOrderData.GetPurchaseOrders(draft.supplier.supplierRecID, draft.roDate)
+        data.GetPurchaseOrders(draft.supplier.supplierRecID, draft.roDate)
             .then(rows => {
                 ReadyStatus();
                 if (rows.length === 0) alert('There is no purchase order to receive for this supplier');
@@ -191,7 +228,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         const run = () => {
             setSearching(true);
             setStatus({ text: 'Importing the purchase order...', isError: false });
-            ReceivingOrderData.GetPurchaseOrderLines(draft.supplier.supplierRecID, po.poRecID, draft.roDate)
+            data.GetPurchaseOrderLines(draft.supplier.supplierRecID, po.poRecID, draft.roDate)
                 .then(result => {
                     const blocked = result.lines.filter(line => line.blockMessage !== '');
                     const imported = result.lines.filter(line => line.blockMessage === '').map(line => ({
@@ -230,7 +267,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                     const lotLines = imported.filter(line => isLotItem(line.itemClass)).length;
                     if (lotLines > 0) notes.push(`• ${Plural(lotLines, 'expiry item')} : open ${lotLines === 1 ? 'it' : 'each one'} to type the expiry date and lot, the qty is 0 until then.`);
                     if (blocked.length > 0) notes.push(`• ${Plural(blocked.length, 'line')} not imported, the item cannot be received today :\n${blocked.map(line => `   ${line.itemReference} : ${line.blockMessage}`).join('\n')}`);
-                    if (result.skipped > 0) notes.push(`• ${Plural(result.skipped, 'line')} not imported : the item is of a brand or item tag you are not allowed to purchase (your purchase privileges). Someone with the privilege must receive ${result.skipped === 1 ? 'it' : 'them'}.`);
+                    if (result.skipped > 0) notes.push(`• ${Plural(result.skipped, 'line')} not imported : a fashion or consignment item, an item without its unit, or an item of a brand / item tag you are not allowed to purchase (your purchase privileges).`);
                     MessageBox.alert(`PO #${po.poRecID}`, `${Plural(imported.length, 'line')} imported with the qty still to receive.${notes.length > 0 ? '\n\n' + notes.join('\n\n') : ''}`);
                 })
                 .catch(err => ShowError(err.message))
@@ -279,11 +316,11 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         const poLine = draft.lines.find(line => line.poQty !== undefined && line.itemRecID.toString() === item.itemRecID.toString() && !!line.isPending === (item.isPending === 1));
         if (poLine) {
             setStatus({ text: `${item.itemReference} : the line of the purchase order`, isError: false });
-            navigation.navigate('ReceivingOrderLine', { lineID: poLine.lineID });
+            navigation.navigate('ReceivingOrderLine', { free,  lineID: poLine.lineID });
             return;
         }
         setStatus({ text: `${item.itemReference} : type the qty`, isError: false });
-        navigation.navigate('ReceivingOrderLine', { item, prefillLot: item.codeExpiry ? { expiry: item.codeExpiry, batch: item.codeBatch } : null });
+        navigation.navigate('ReceivingOrderLine', { free,  item, prefillLot: item.codeExpiry ? { expiry: item.codeExpiry, batch: item.codeBatch } : null });
     };
 
     const Lookup = (text, itemRecID = null) => {
@@ -292,7 +329,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         setHeaderOpen(false);
         setSearching(true);
         setStatus({ text: `Searching ${code}...`, isError: false });
-        ReceivingOrderData.FindItem(draft.supplier.supplierRecID, code, draft.roDate)
+        data.FindItem(draft.supplier.supplierRecID, code, draft.roDate)
             .then(items => {
                 const found = itemRecID ? items.filter(item => item.itemRecID.toString() === itemRecID.toString()) : items;
                 if (found.length === 1) OpenItem(found[0]);
@@ -312,7 +349,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
     const SearchStock = (code) => {
         setSearching(true);
         setStatus({ text: `Searching "${code}" in the stock...`, isError: false });
-        ReceivingOrderData.SearchItems(draft.supplier.supplierRecID, code)
+        data.SearchItems(draft.supplier.supplierRecID, code)
             .then(items => {
                 if (items.length === 0) NotFound(code);
                 else if (items.length === 1) Lookup(items[0].itemReference, items[0].itemRecID);
@@ -336,6 +373,8 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         Lookup(text);
     };
 
+    pickRef.current = (pick) => Lookup(pick.itemReference, pick.itemRecID);
+
     // An item picked in the stock search : its details for the receiving order (supplier ref, privileges, dates)
     const PickFromSearch = (itemRecID, itemReference) => {
         setSearchText(null);
@@ -348,6 +387,9 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
         if (CanScan()) setSearchChoiceVisible(true);
     };
 
+    // Free Receiving offline : the stock search of the stock file downloaded
+    const localSearch = free && !FreeReceivingSource.isOnline();
+
     const StockSearch = () => {
         setSearchChoiceVisible(false);
         if (scanText.trim().length >= 3) { const text = scanText; setScanText(''); setSearchText(text.trim()); }
@@ -357,7 +399,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
     const OpenPendingItems = () => {
         setSearching(true);
         setStatus({ text: 'Loading the pending stock items...', isError: false });
-        ReceivingOrderData.GetPendingItems()
+        data.GetPendingItems()
             .then(items => {
                 if (items.length === 0) {
                     ReadyStatus();
@@ -381,9 +423,11 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
     };
 
     const Clear = () => {
-        MessageBox.alert('Clear', `The ${MODE_TITLES[draft.mode].toLowerCase()} and its ${Plural(draft.lines.length, isModify ? 'new line' : 'line')} will be cleared.`, [
+        MessageBox.alert('Clear', free
+            ? `The receiving order and its ${draft.lines.length} item(s) will be cleared.`
+            : `The ${MODE_TITLES[draft.mode].toLowerCase()} and its ${Plural(draft.lines.length, isModify ? 'new line' : 'line')} will be cleared.`, [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Clear', style: 'destructive', onPress: () => { ClearDraft(); navigation.navigate('ReceivingOrder'); } },
+            { text: 'Clear', style: 'destructive', onPress: () => { ClearDraft(); navigation.navigate(homeScreen); } },
         ]);
     };
 
@@ -394,7 +438,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
             ? line.lots.map(lot => `${lot.expiry} / ${lot.batch} : ${FormatQty(lot.qty)}`).join('  ·  ') : '';
         return (
             <TouchableOpacity style={[styles.lineContainer, line.saved && !readOnly ? styles.lineSaved : null]}
-                onPress={() => navigation.navigate('ReceivingOrderLine', { lineID: line.lineID, view })}>
+                onPress={() => navigation.navigate('ReceivingOrderLine', { free,  lineID: line.lineID, view })}>
                 <View style={[styles.statusStripe, { backgroundColor: STATUS_COLORS[line.lineStatus] ?? 'gray' }]} />
                 <View style={styles.lineTextContainer}>
                     <Text style={styles.lineReferenceText} numberOfLines={1}>{line.itemReference}</Text>
@@ -473,6 +517,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
             <ROSupplierPicker
                 visible={supplierPickerVisible}
                 selectedRecID={draft.supplier?.supplierRecID}
+                data={data}
                 onPick={supplier => {
                     setSupplierPickerVisible(false);
                     UpdateDraft(current => ({ supplier, po: current.supplier?.supplierRecID === supplier.supplierRecID ? current.po : null }));
@@ -534,8 +579,16 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                 onClose={() => { setPendingItems(null); ReadyStatus(); focusScan(); }}
             />
 
+            <FreeReceivingItemPicker
+                visible={localSearch && (searchText !== null || browseVisible)}
+                searchText={searchText ?? ''}
+                title='Search (Device Stock)'
+                onPick={item => PickFromSearch(item.itemRecID, item.itemReference)}
+                onClose={() => { setSearchText(null); setBrowseVisible(false); ReadyStatus(); focusScan(); }}
+            />
+
             {/* The stock search with the conditions of the receiving order : by text, or by product group */}
-            <Modal visible={searchText !== null} onRequestClose={() => { setSearchText(null); ReadyStatus(); focusScan(); }}>
+            <Modal visible={searchText !== null && !localSearch} onRequestClose={() => { setSearchText(null); ReadyStatus(); focusScan(); }}>
                 <Items
                     title='Receiving Order'
                     itemProductGroupCode=''
@@ -549,7 +602,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                 />
             </Modal>
 
-            <Modal visible={browseVisible} onRequestClose={() => { setBrowseVisible(false); ReadyStatus(); focusScan(); }}>
+            <Modal visible={browseVisible && !localSearch} onRequestClose={() => { setBrowseVisible(false); ReadyStatus(); focusScan(); }}>
                 <ItemProductGroups
                     searchFor='RO'
                     itemsSwitch={true}
@@ -626,6 +679,7 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                         </View>
                     </View>
 
+                    {!free ?
                     <View style={choiceRowStyle.row}>
                         <ChoiceField
                             title='Purchase Order (Optional)'
@@ -638,7 +692,8 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                                 <Text style={styles.removePOText}>✕</Text>
                             </TouchableOpacity> :
                             <></>}
-                    </View>
+                    </View> :
+                    <></>}
 
                 </ScrollView> :
                 <></>}
@@ -661,8 +716,8 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                         blurOnSubmit={false}
                         editable={!searching}
                         maxLength={100}
-                        onChangeText={setScanText}
-                        onSubmitEditing={HandleScan}
+                        onChangeText={text => { scanWithoutEnter.watch(text, scanText); setScanText(text); }}
+                        onSubmitEditing={() => { scanWithoutEnter.cancel(); HandleScan(); }}
                     />
                     <TouchableOpacity style={[styles.keyboardButton, typing ? styles.keyboardButtonOn : null]} onPress={() => {
                         const next = !typing;
@@ -699,15 +754,17 @@ const ReceivingOrderEditScreen = ({ navigation, route }) => {
                         <Text style={styles.summaryText} numberOfLines={1}>{Plural(newLines.length, isModify ? 'New Line' : 'Line')}</Text>
                         {missing > 0 ? <Text style={[styles.summaryText, styles.summaryMissingText]} numberOfLines={1}>{missing} To Complete</Text> : <></>}
                     </View>
-                    <MeasTotalsTable lines={newLines} />
+                    <MeasTotalsTable lines={newLines} noReturn={free} />
                 </View>
                 <View style={styles.actionsContainer}>
                     {isView ?
                         <MainButton title='Close' imageSource={require('../assets/icons/close.png')}
-                            onPress={() => { ClearDraft(true); navigation.navigate('ReceivingOrder'); }} /> :
+                            onPress={() => { ClearDraft(true); navigation.navigate(homeScreen); }} /> :
                         <>
                             <MainButton title={isCancel ? 'Cancel RO' : 'Save'} imageSource={isCancel ? require('../assets/icons/ReturnOrders.png') : require('../assets/icons/upload.png')}
-                                onPress={() => ConfirmAndSave(draft, setSaving, () => navigation.navigate('ReceivingOrder'))} />
+                                onPress={() => free
+                                    ? FreeSave(draft, setSaving, () => navigation.navigate(homeScreen))
+                                    : ConfirmAndSave(draft, setSaving, () => navigation.navigate(homeScreen))} />
                             <MainButton title='Clear' imageSource={require('../assets/icons/deleteLine.png')} onPress={Clear} />
                         </>}
                 </View>

@@ -29,9 +29,7 @@ import PhysicalCountCreateItemsScreen from './../screens/PhysicalCountCreateItem
 import PrintLabelScreen from './../screens/PrintLabelScreen';
 import ReprintDocumentsScreen from './../screens/ReprintDocumentsScreen';
 import FreeReceivingScreen from './../screens/FreeReceivingScreen';
-import FreeReceivingScanScreen from './../screens/FreeReceivingScanScreen';
 import FreeReceivingItemsScreen from './../screens/FreeReceivingItemsScreen';
-import FreeReceivingSettingsScreen from './../screens/FreeReceivingSettingsScreen';
 import TransferScanScreen from './../screens/TransferScanScreen';
 import TransferSettingsScreen from './../screens/TransferSettingsScreen';
 import ReceivingOrderScreen from './../screens/ReceivingOrderScreen';
@@ -207,26 +205,10 @@ const AppNavigator = (params) => {
                     })} />
 
                 <Stack.Screen
-                    name='FreeReceivingScan'
-                    component={FreeReceivingScanScreen}
-                    options={({ navigation }) => ({
-                        title: 'Free Receiving - Scan Items',
-                        ...BackArrowOptions(navigation),
-                    })} />
-
-                <Stack.Screen
                     name='FreeReceivingItems'
                     component={FreeReceivingItemsScreen}
                     options={({ navigation }) => ({
                         title: 'Free Receiving - Items',
-                        ...BackArrowOptions(navigation),
-                    })} />
-
-                <Stack.Screen
-                    name='FreeReceivingSettings'
-                    component={FreeReceivingSettingsScreen}
-                    options={({ navigation }) => ({
-                        title: 'Free Receiving - Settings',
                         ...BackArrowOptions(navigation),
                     })} />
 

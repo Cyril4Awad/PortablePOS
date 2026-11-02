@@ -5,6 +5,7 @@ import { FontSize } from '../../../variables/ResponsiveFont';
 import ModalTitle from '../../ModalTitle';
 import LoadingData from '../../LoadingData';
 import PrintLabelData from '../../../data/PrintLabelData';
+import { useScanWithoutEnter } from '../../../variables/ScanInput';
 
 const SEARCH_LIMIT = 50;
 
@@ -15,6 +16,7 @@ const SEARCH_LIMIT = 50;
 const PrintLabelItemSearch = props => {
 
     const [searchText, setSearchText] = useState('');
+    const searchWithoutEnter = useScanWithoutEnter(() => Search());
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
@@ -73,8 +75,8 @@ const PrintLabelItemSearch = props => {
                         autoFocus={true}
                         autoCapitalize='characters'
                         returnKeyType='search'
-                        onChangeText={setSearchText}
-                        onSubmitEditing={Search}
+                        onChangeText={text => { searchWithoutEnter.watch(text, searchText); setSearchText(text); }}
+                        onSubmitEditing={() => { searchWithoutEnter.cancel(); Search(); }}
                     />
                     <TouchableOpacity style={styles.searchButton} onPress={Search}>
                         <Image source={require('../../../assets/icons/stock.png')} style={styles.searchButtonImage} resizeMode='contain' />

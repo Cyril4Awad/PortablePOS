@@ -5,72 +5,50 @@ import { FontSize } from '../../../variables/ResponsiveFont';
 import ModalTitle from '../../ModalTitle';
 import FreeReceivingItem from './FreeReceivingItem';
 import FreeReceivingDatabase from '../../../database/FreeReceivingDatabase';
-import { PICK_LIMIT, SEARCH_FIELD_LABELS } from '../../../variables/FreeReceivingRules';
+import { PICK_LIMIT } from '../../../variables/FreeReceivingRules';
 
-// Items read at most for a scan that matches many items (all the items of a supplier code for example)
-const BASE_LIMIT = 5000;
-
-// Opens when the scanned text matches more than one item, or to pick the item a promotion is linked to
-// props : visible, field, searchText, exact, title, onPick(item), onClose
-// - field of the scan screen : the items of the scanned value, the search box narrows them (reference, description, single refs)
-// - field 'any' : the search box searches the whole stock file (reference, description, codes)
+// The stock search of the downloaded stock file (the Search button, a scan that finds several items), like the stock search of the Receiving Order
+// props : visible, searchText, items, title, onPick(item), onClose
+// - items : the items of a scanned code used by several items, the search box narrows them
+// - no items : the search box searches the whole stock file (any part of the reference, description, single references or a code)
 const FreeReceivingItemPicker = props => {
 
-    const anyMode = props.field === 'any';
+    const codeItems = props.items ?? null;
 
     const [searchString, setSearchString] = useState('');
-    const [baseItems, setBaseItems] = useState([]);
     const [items, setItems] = useState([]);
 
-    // The items of the scanned value, read once when the list opens
     useEffect(() => {
-
-        if (!props.visible) return;
-
-        setSearchString(anyMode ? (props.searchText ?? '') : '');
-        setBaseItems([]);
-        setItems([]);
-
-        if (anyMode) return;
-
-        let active = true;
-
-        FreeReceivingDatabase.FindItems(props.field, props.searchText ?? '', props.exact === true, BASE_LIMIT)
-            .then(result => { if (active) setBaseItems(result); })
-            .catch(err => console.log(err));
-
-        return () => { active = false; };
-
+        if (props.visible) setSearchString(codeItems ? '' : (props.searchText ?? ''));
     }, [props.visible]);
 
     useEffect(() => {
 
         if (!props.visible) return;
 
-        if (!anyMode) {
+        if (codeItems) {
             const text = searchString.trim().toUpperCase();
-            const filtered = text === '' ? baseItems : baseItems.filter(item =>
+            setItems(text === '' ? codeItems : codeItems.filter(item =>
                 item.itemReferenceUpper.includes(text) || item.itemDescriptionUpper.includes(text)
-                || (item.itemSingleRef1Upper ?? '').includes(text) || (item.itemSingleRef2Upper ?? '').includes(text));
-            setItems(filtered.slice(0, PICK_LIMIT));
+                || (item.itemSingleRef1Upper ?? '').includes(text) || (item.itemSingleRef2Upper ?? '').includes(text)));
             return;
         }
 
         let active = true;
 
-        FreeReceivingDatabase.FindItems('any', searchString, false, PICK_LIMIT)
+        FreeReceivingDatabase.SearchItems(searchString, PICK_LIMIT)
             .then(result => { if (active) setItems(result); })
             .catch(err => console.log(err));
 
         return () => { active = false; };
 
-    }, [props.visible, searchString, baseItems]);
+    }, [props.visible, searchString, codeItems]);
 
     const ItemRow = itemData => (
         <FreeReceivingItem item={itemData.item} onPress={() => props.onPick(itemData.item)} />
     );
 
-    const subtitle = anyMode ? '' : `${SEARCH_FIELD_LABELS[props.field]} ${props.searchText ?? ''}  ·  ${baseItems.length}${baseItems.length === BASE_LIMIT ? '+' : ''} items`;
+    const subtitle = codeItems ? `${props.searchText ?? ''}  ·  ${codeItems.length} items` : '';
 
     return (
         <Modal visible={props.visible} onRequestClose={props.onClose}>
@@ -83,7 +61,7 @@ const FreeReceivingItemPicker = props => {
                 <View style={styles.searchContainer}>
                     <TextInput
                         style={styles.searchText}
-                        placeholder={anyMode ? 'Reference, Description Or Code' : 'Narrow By Reference Or Description'}
+                        placeholder={codeItems ? 'Narrow By Reference Or Description' : 'Reference, Description Or Code'}
                         maxLength={50}
                         value={searchString}
                         autoFocus={true}

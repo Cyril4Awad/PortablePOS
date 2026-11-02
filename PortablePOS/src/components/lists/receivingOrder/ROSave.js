@@ -57,8 +57,8 @@ export const LineConsQty = (line) => {
 };
 
 // The totals box of FrmDO (GroupBox3) : a row per measure type (pieces, kg, meters), normal / free / return consumed qty
-// The pieces row is always there, kg and meters only when the receiving order has them
-export const MeasTotalsTable = ({ lines }) => {
+// The pieces row is always there, kg and meters only when the receiving order has them, noReturn : no return column (Free Receiving)
+export const MeasTotalsTable = ({ lines, noReturn = false }) => {
     const totals = { P: { N: 0, F: 0, R: 0 } };
     lines.forEach(line => {
         const type = MEAS_LABELS[line.itemMeasType] ? line.itemMeasType : 'P';
@@ -67,18 +67,19 @@ export const MeasTotalsTable = ({ lines }) => {
         totals[type][status] += LineConsQty(line);
     });
     const types = Object.keys(MEAS_LABELS).filter(type => totals[type]);
+    const statuses = Object.keys(STATUS_TOTAL_LABELS).filter(status => !noReturn || status !== 'R');
     return (
         <View style={styles.totalsTable}>
             <View style={styles.totalsRow}>
                 <Text style={[styles.totalsCell, styles.totalsTypeCell]}></Text>
-                {Object.keys(STATUS_TOTAL_LABELS).map(status => (
+                {statuses.map(status => (
                     <Text key={status} style={[styles.totalsCell, styles.totalsHeaderText]}>{STATUS_TOTAL_LABELS[status]}</Text>
                 ))}
             </View>
             {types.map(type => (
                 <View key={type} style={styles.totalsRow}>
                     <Text style={[styles.totalsCell, styles.totalsTypeCell, styles.totalsHeaderText]}>{MEAS_LABELS[type]}</Text>
-                    {Object.keys(STATUS_TOTAL_LABELS).map(status => (
+                    {statuses.map(status => (
                         <Text key={status} style={[styles.totalsCell, styles.totalsValueText, status === 'R' && totals[type][status] > 0 ? { color: 'rgb(200, 60, 60)' } : null]} numberOfLines={1}>
                             {FormatQty(Math.round(totals[type][status] * 1000) / 1000)}
                         </Text>
@@ -89,7 +90,8 @@ export const MeasTotalsTable = ({ lines }) => {
     );
 };
 
-const Payload = (draft) => ({
+// The receiving order sent to the server (SaveReceivingOrder, SaveFreeReceiving)
+export const Payload = (draft) => ({
     roRecID: draft.roRecID,
     supplierRecID: draft.supplier ? draft.supplier.supplierRecID.toString() : '',
     roRef: draft.roRef.trim(),

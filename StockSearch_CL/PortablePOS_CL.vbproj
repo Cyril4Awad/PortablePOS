@@ -186,6 +186,9 @@
     <EmbeddedResource Include="UserControls\cntMissingItems.resx">
       <DependentUpon>cntMissingItems.vb</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="UserControls\cntNegations.resx">
+      <DependentUpon>cntNegations.vb</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="UserControls\cntPotentialClients.resx">
       <DependentUpon>cntPotentialClients.vb</DependentUpon>
     </EmbeddedResource>
@@ -197,6 +200,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="UserControls\cntUploads.resx">
       <DependentUpon>cntUploads.vb</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UserControls\cntUserPrivilege.resx">
+      <DependentUpon>cntUserPrivilege.vb</DependentUpon>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>

@@ -5,8 +5,10 @@ import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
 import MainButton from '../components/controls/MainButton';
 import ReceivingOrderData from '../data/ReceivingOrderData';
+import FreeReceivingSource from '../data/FreeReceivingSource';
 import ROChoiceModal from '../components/lists/receivingOrder/ROChoiceModal';
-import { useReceivingOrderDraft, GetDraft, SetLines, NextID } from '../variables/ReceivingOrderDraft';
+import { useReceivingOrderDraft, GetDraft, SetLines as SetLinesOf, NextID } from '../variables/ReceivingOrderDraft';
+import { useScanWithoutEnter } from '../variables/ScanInput';
 import MessageBox from '../components/MessageBox';
 import {
     STATUS_LABELS, STATUS_ORDER, isLotItem, ParseQty, FormatQty, LineQty, LineBarcodes, Plural,
@@ -20,17 +22,23 @@ const EMPTY_LOT = { expiry: '', batch: '', production: '', qty: '', barcodes: []
 // One line of the receiving order (FrmDO rules) : the status (normal, free, return), the supplier ref,
 // the qty (trading item) or the expiry / lots (expiry item), the barcodes
 // route.params : { item, prefillLot } for a new line, { lineID } for a line of the list (a saved line is read only), view : the RO viewed
+// free : a line of the receiving order of Free Receiving (its draft, the stock of the server online or of the device offline)
 const ReceivingOrderLineScreen = ({ route, navigation }) => {
 
     // view : a line of the receiving order viewed
     const view = !!route.params?.view;
-    const draft = useReceivingOrderDraft(view);
+    const free = !!route.params?.free;
+    const slot = free ? 'FREE' : view;
+    const draft = useReceivingOrderDraft(slot);
+    const data = free ? FreeReceivingSource : ReceivingOrderData;
+    const SetLines = (change) => SetLinesOf(change, free ? 'FREE' : 'RO');
+    const titlePrefix = free ? 'Free Receiving' : 'Receiving Order';
 
     // The line being edited, or a new one for the item
     const existing = route.params?.lineID
-        ? [...(GetDraft(view)?.lines ?? []), ...(GetDraft(view)?.savedLines ?? [])].find(line => line.lineID === route.params.lineID)
+        ? [...(GetDraft(slot)?.lines ?? []), ...(GetDraft(slot)?.savedLines ?? [])].find(line => line.lineID === route.params.lineID)
         : null;
-    const readOnly = !!existing && (GetDraft(view)?.savedLines ?? []).some(line => line.lineID === existing.lineID) || isReadOnlyMode(GetDraft(view)?.mode);
+    const readOnly = !!existing && (GetDraft(slot)?.savedLines ?? []).some(line => line.lineID === existing.lineID) || isReadOnlyMode(GetDraft(slot)?.mode);
     const item = existing ?? route.params?.item ?? {};
     const lotItem = isLotItem(item.itemClass);
     // An item of the pending stock file : created in the stock file when the RO is saved (no stock, no return, cost 0)
@@ -44,6 +52,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
     // The lot being typed (expiry item)
     const [lotForm, setLotForm] = useState(null);
     const [barcodeText, setBarcodeText] = useState('');
+    const barcodeWithoutEnter = useScanWithoutEnter(text => AddBarcode(text));
     // null until the stock of the location is loaded
     const [stock, setStock] = useState(null);
     const [message, setMessage] = useState({ text: '', isError: false });
@@ -55,7 +64,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
     const qtyRef = useRef();
 
     useEffect(() => {
-        navigation.setOptions({ title: readOnly ? 'Receiving Order - Line' : existing ? 'Receiving Order - Change Line' : 'Receiving Order - New Line' });
+        navigation.setOptions({ title: `${titlePrefix} - ${readOnly ? 'Line' : existing ? 'Change Line' : 'New Line'}` });
         if (!item.itemRecID || !draft?.location) return;
         if (isPending) setStock({ lots: [], knownLots: [] });
         else LoadStock().catch(err => setMessage({ text: `Stock not loaded : ${err.message}`, isError: true }));
@@ -85,7 +94,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
 
     // The stock is loaded again when it was not there yet (a return is checked with it)
     const LoadStock = async () => {
-        const loaded = await ReceivingOrderData.GetItemLots(item.itemRecID, draft.location.locationCode);
+        const loaded = await data.GetItemLots(item.itemRecID, draft.location.locationCode);
         setStock(loaded);
         return loaded;
     };
@@ -99,7 +108,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
     };
 
     // The qty already returned by the other new lines of the same item and lot
-    const ReturnedByOthers = (expiry, batch) => (GetDraft(view)?.lines ?? [])
+    const ReturnedByOthers = (expiry, batch) => (GetDraft(slot)?.lines ?? [])
         .filter(line => line.lineStatus === 'R' && line.itemRecID.toString() === item.itemRecID.toString() && line.lineID !== existing?.lineID)
         .reduce((total, line) => total + (lotItem
             ? line.lots.filter(lot => lot.expiry === expiry && lot.batch === batch).reduce((sum, lot) => sum + Number(lot.qty), 0)
@@ -121,7 +130,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
     //#region Barcodes
 
     // Every barcode already used in the receiving order, except the ones of this line
-    const OtherBarcodes = () => [...(GetDraft(view)?.lines ?? []), ...(GetDraft(view)?.savedLines ?? [])]
+    const OtherBarcodes = () => [...(GetDraft(slot)?.lines ?? []), ...(GetDraft(slot)?.savedLines ?? [])]
         .filter(line => line.lineID !== existing?.lineID)
         .reduce((all, line) => all.concat(LineBarcodes(line)), []);
 
@@ -142,7 +151,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
         if (lineBarcodes.includes(barcode) || OtherBarcodes().includes(barcode)) { ShowMessage(`${barcode} is already in the receiving order`, true); return; }
         if (currentBarcodes.length >= barcodeLimit()) { ShowMessage(`The barcodes cannot be more than the qty (${FormatQty(barcodeLimit())})`, true); return; }
         setBusy(true);
-        ReceivingOrderData.CheckBarcode(item.itemRecID, barcode)
+        data.CheckBarcode(item.itemRecID, barcode)
             .then(result => {
                 setCurrentBarcodes([...currentBarcodes, barcode]);
                 const checkDigit = BarcodeCheckDigitOk(barcode) ? '' : '  (the check digit looks wrong)';
@@ -155,7 +164,7 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
     const GenerateBarcode = () => {
         if (currentBarcodes.length >= barcodeLimit()) { ShowMessage(`Type the qty first, the barcodes cannot be more than the qty (${FormatQty(barcodeLimit())})`, true); return; }
         setBusy(true);
-        ReceivingOrderData.GenerateBarcode()
+        data.GenerateBarcode()
             .then(barcode => {
                 setCurrentBarcodes([...currentBarcodes, barcode]);
                 ShowMessage(`${barcode} generated`);
@@ -181,8 +190,8 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
                         blurOnSubmit={false}
                         maxLength={40}
                         editable={!busy}
-                        onChangeText={setBarcodeText}
-                        onSubmitEditing={() => AddBarcode(barcodeText)}
+                        onChangeText={text => { barcodeWithoutEnter.watch(text, barcodeText); setBarcodeText(text); }}
+                        onSubmitEditing={() => { barcodeWithoutEnter.cancel(); AddBarcode(barcodeText); }}
                     />
                     <TouchableOpacity style={styles.smallButton} onPress={GenerateBarcode} disabled={busy}>
                         <Text style={styles.smallButtonText}>Generate</Text>
@@ -513,7 +522,8 @@ const ReceivingOrderLineScreen = ({ route, navigation }) => {
 
                 {/* Normal / Free / Return */}
                 <View style={styles.statusRow}>
-                    {STATUS_ORDER.map(code => (
+                    {/* Free Receiving : normal and free only (no return) */}
+                    {STATUS_ORDER.filter(code => !free || code !== 'R').map(code => (
                         <TouchableOpacity key={code} disabled={readOnly || (isPending && code === 'R')}
                             style={[styles.statusButton, lineStatus === code ? { backgroundColor: STATUS_COLORS[code], borderColor: STATUS_COLORS[code] } : null,
                                 isPending && code === 'R' ? styles.statusButtonDisabled : null]}

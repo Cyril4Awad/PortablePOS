@@ -14,6 +14,8 @@ Public Class frmDuplicatePrivilege
 #Region "Declarations"
 
     Private ReadOnly LstTargets As New C1TrueDBGrid
+    Private ReadOnly btnCheckAll As New Button
+    Private ReadOnly btnUncheckAll As New Button
     Private ReadOnly btnOK As New Button
     Private ReadOnly btnCancel As New Button
     Private ReadOnly dtTargets As New DataTable
@@ -58,13 +60,19 @@ Public Class frmDuplicatePrivilege
         Next
 
         LstTargets.Location = New Point(20, 40)
-        LstTargets.Size = New Size(340, 325)
+        LstTargets.Size = New Size(340, 300)
         LstTargets.Font = New Font("Microsoft Sans Serif", 8.25!, FontStyle.Bold)
         LstTargets.RowHeight = 18
         LstTargets.AllowColMove = False
         LstTargets.AllowColSelect = False
         LstTargets.AllowRowSizing = RowSizingEnum.None
         LstTargets.EmptyRows = True
+
+        StyleButton(btnCheckAll, "Check All", Color.White, brandBlue)
+        btnCheckAll.Location = New Point(20, 348)
+
+        StyleButton(btnUncheckAll, "Uncheck All", Color.White, brandBlue)
+        btnUncheckAll.Location = New Point(130, 348)
 
         StyleButton(btnCancel, "Cancel", Color.White, brandBlue)
         btnCancel.Location = New Point(154, 378)
@@ -73,8 +81,10 @@ Public Class frmDuplicatePrivilege
         StyleButton(btnOK, "Duplicate", brandBlue, Color.White)
         btnOK.Location = New Point(260, 378)
         AddHandler btnOK.Click, AddressOf btnOK_Click
+        AddHandler btnCheckAll.Click, AddressOf btnCheckAll_Click
+        AddHandler btnUncheckAll.Click, AddressOf btnUncheckAll_Click
 
-        Me.Controls.AddRange({lblInfo, LstTargets, btnCancel, btnOK})
+        Me.Controls.AddRange({lblInfo, LstTargets, btnCheckAll, btnUncheckAll, btnCancel, btnOK})
         Me.CancelButton = btnCancel
 
         AddHandler Me.Load, AddressOf frm_Load
@@ -141,6 +151,24 @@ Public Class frmDuplicatePrivilege
         btn.ForeColor = foreColor
         btn.Font = New Font("Tahoma", 9.0!, If(backColor = Color.White, FontStyle.Regular, FontStyle.Bold))
         btn.Cursor = Cursors.Hand
+    End Sub
+
+    Private Sub SetAllTargets(selected As Boolean)
+
+        LstTargets.UpdateData()
+        For Each row As DataRow In dtTargets.Rows
+            row("Select") = selected
+        Next
+        LstTargets.Refresh()
+
+    End Sub
+
+    Private Sub btnCheckAll_Click(sender As Object, e As EventArgs)
+        SetAllTargets(True)
+    End Sub
+
+    Private Sub btnUncheckAll_Click(sender As Object, e As EventArgs)
+        SetAllTargets(False)
     End Sub
 
     'Clicking a user (not only its check box) ticks / unticks it

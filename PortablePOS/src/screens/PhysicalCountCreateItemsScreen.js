@@ -9,6 +9,7 @@ import LoadingData from '../components/LoadingData';
 import PhysicalCountCreateLine from '../components/lists/physicalCount/PhysicalCountCreateLine';
 import PhysicalCountData, { NewRequestID, CREATE_TIMEOUT_MESSAGE } from '../data/PhysicalCountData';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
+import { useScanWithoutEnter } from '../variables/ScanInput';
 import { HasGroups, WithoutGroups, CreateSelection, CheckAll, UncheckAll, IsChecked, ToggleItem, RememberSelection } from '../variables/PhysicalCountCreateRules';
 import MessageBox from '../components/MessageBox';
 
@@ -42,6 +43,7 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
 
   const [view, setView] = useState(HasGroups(filters) || route.params.selection ? CHECKED_ITEMS : ALL_ITEMS);
   const [searchString, setSearchString] = useState('');
+  const scanWithoutEnter = useScanWithoutEnter(() => ScanSubmit());
 
   // Kept in a ref too : checking an item works on the latest selection without redrawing every line
   const [selection, setSelectionState] = useState(initialSelection);
@@ -272,9 +274,10 @@ const PhysicalCountCreateItemsScreen = ({ route, navigation }) => {
           blurOnSubmit={false}
           onChangeText={text => {
             setStatus(null);
+            scanWithoutEnter.watch(text, searchString);
             setSearchString(text);
           }}
-          onSubmitEditing={ScanSubmit}
+          onSubmitEditing={() => { scanWithoutEnter.cancel(); ScanSubmit(); }}
         />
       </View>
 

@@ -213,19 +213,28 @@ const GetSummary = async () => {
   return rows[0];
 };
 
+// The line of a lot for a destination (null : none)
+const GetLineID = async (lotRecID, destination) => {
+  const rows = await query('SELECT lineID FROM TR_Lines WHERE lotRecID = ? AND destination = ?', [lotRecID, destination]);
+  return rows.length > 0 ? rows[0].lineID : null;
+};
+
 // All the lines (sent by Save Transfer), in the order they were added
 const GetAllLines = () => query('SELECT * FROM TR_Lines ORDER BY lineID');
 
-// The last lines first, searched by the item reference / description, the lot or the destination
+// The items added last first : by the first line of the lot (a qty typed or a destination added does not move the item),
+// searched by the item reference / description, the lot or the destination
+const LINES_ORDER = 'ORDER BY ( SELECT MIN(L2.lineID) FROM TR_Lines L2 WHERE L2.lotRecID = TR_Lines.lotRecID ) DESC, lineID';
+
 const GetLines = (searchText, limit) => {
   const text = (searchText ?? '').trim();
-  if (text === '') return query('SELECT * FROM TR_Lines ORDER BY updatedAt DESC, lineID DESC LIMIT ?', [limit]);
+  if (text === '') return query(`SELECT * FROM TR_Lines ${LINES_ORDER} LIMIT ?`, [limit]);
   const part = '%' + likeText(upper(text)) + '%';
   return query(
     `SELECT * FROM TR_Lines
      WHERE UPPER(itemReference) LIKE ? ESCAPE '!' OR UPPER(itemDescription) LIKE ? ESCAPE '!'
            OR UPPER(lotBatch) LIKE ? ESCAPE '!' OR UPPER(destination) LIKE ? ESCAPE '!'
-     ORDER BY updatedAt DESC, lineID DESC LIMIT ?`, [part, part, part, part, limit]);
+     ${LINES_ORDER} LIMIT ?`, [part, part, part, part, limit]);
 };
 
 // The qty of a lot in the transfer (all the destinations)
@@ -335,6 +344,7 @@ const ClearLines = () => executeInTransaction([
 //#endregion
 
 export default {
+  GetLineID,
   GetInfo,
   SaveServerInfo,
   GetDestinations,

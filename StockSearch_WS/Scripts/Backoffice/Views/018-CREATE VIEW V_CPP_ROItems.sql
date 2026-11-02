@@ -7,6 +7,7 @@ GO
 -- not the normal item of a consignment pair (V_StockNormalCons)
 -- itemMeasType / itemConsFactor : measure type of the sub unit (P pieces, W weight, L length) and the sub unit qty of 1 unit (totals of FrmDO)
 -- itemTag (STK_NEWUSED) and itemBrand : checked against the user privileges (V_CPP_UserItemTags, V_CPP_UserPurchaseAccess)
+-- itemSendToPOS : Y when the item is sent to the POS (Free Receiving receives only these)
 CREATE OR ALTER VIEW V_CPP_ROItems
 AS
     SELECT  STK_RECID [itemRecID] ,
@@ -39,7 +40,8 @@ AS
                                          WHEN ISNULL(MEASUB.Meas_Sign, '*') = '/' THEN 1.0 / ISNULL(STK_UNITPACK, 1) / ISNULL(MEASUB.Meas_Value, 1)
                                          WHEN LTRIM(RTRIM(ISNULL(STK_OPERATOR, '*'))) <> '/' THEN ISNULL(STK_UNITPACK, 1) * ISNULL(MEASUB.Meas_Value, 1)
                                          ELSE 1.0 / ISNULL(STK_UNITPACK, 1) * ISNULL(MEASUB.Meas_Value, 1) END) [itemConsFactor] ,
-            ISNULL(MEASUB.Meas_Value, 1) [itemMeasValue]
+            ISNULL(MEASUB.Meas_Value, 1) [itemMeasValue] ,
+            UPPER(ISNULL(STK_SendToPOS, 'N')) [itemSendToPOS]
     FROM    dbo.STK04_STKFIL
             INNER JOIN dbo.stk04_measurements MEASU ON MEASU.Meas_unit = STK_UNIT
             INNER JOIN dbo.stk04_measurements MEASUB ON MEASUB.Meas_unit = STK_SUBUNIT

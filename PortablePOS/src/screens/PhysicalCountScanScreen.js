@@ -7,6 +7,7 @@ import PhysicalCountItemPicker from '../components/lists/physicalCount/PhysicalC
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
 import { getLoginUserCode } from '../variables/LoginInfo';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
+import { useScanWithoutEnter } from '../variables/ScanInput';
 import {
   AllowedDecimals, FormatQuantity, LookupScan, LineFields, CodeDescription,
   ScanCount, UpdateLastScanQty, CancelLastScan, UpdateTotalScanned
@@ -24,6 +25,10 @@ const PhysicalCountScanScreen = ({ route, navigation }) => {
   const [decimals, setDecimals] = useState(0);
 
   const [scanner, setScanner] = useState('');
+  const scanWithoutEnter = useScanWithoutEnter(text => {
+    HandleScan(text);
+    setScanner('');
+  });
   const [line, setLine] = useState(null);
   const [totalText, setTotalText] = useState('');
   const [lastScannedText, setLastScannedText] = useState('');
@@ -186,7 +191,7 @@ const PhysicalCountScanScreen = ({ route, navigation }) => {
           ref={scannerInputControl}
           style={styles.scannerText}
           value={scanner}
-          onChangeText={setScanner}
+          onChangeText={text => { scanWithoutEnter.watch(text, scanner); setScanner(text); }}
           showSoftInputOnFocus={false}
           onPressIn={() => Keyboard.dismiss()}
           placeholder='Scan Item'
@@ -194,6 +199,7 @@ const PhysicalCountScanScreen = ({ route, navigation }) => {
           autoFocus={true}
           blurOnSubmit={false}
           onSubmitEditing={() => {
+            scanWithoutEnter.cancel();
             HandleScan(scanner);
             setScanner('');
           }}

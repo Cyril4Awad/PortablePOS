@@ -12,6 +12,7 @@ import PhysicalCountDifferences from '../components/lists/physicalCount/Physical
 import PhysicalCountItemPicker from '../components/lists/physicalCount/PhysicalCountItemPicker';
 import PhysicalCountDatabase from '../database/PhysicalCountDatabase';
 import { getLoginUserCode } from '../variables/LoginInfo';
+import { useScanWithoutEnter } from '../variables/ScanInput';
 import { PlayScanOk, PlayScanError, PlayQtyConfirmed } from '../variables/PhysicalCountSounds';
 import { FormatQuantity, LookupScan, LineFields, CodeDescription, NegationAllowed } from '../variables/PhysicalCountRules';
 import {
@@ -54,6 +55,7 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
     const [warningText, setWarningText] = useState('');
 
     const [scanText, setScanText] = useState('');
+    const scanWithoutEnter = useScanWithoutEnter(() => HandleScanField());
     const [qtyText, setQtyTextState] = useState('1');            // scan then type
     const qtyTextRef = useRef('1');
     const setQtyText = (value) => { qtyTextRef.current = value; setQtyTextState(value); };
@@ -573,8 +575,8 @@ const PhysicalCountScanTestingScreen = ({ route }) => {
                     autoFocus={true}
                     blurOnSubmit={false}
                     maxLength={100}
-                    onChangeText={setScanText}
-                    onSubmitEditing={HandleScanField}
+                    onChangeText={text => { scanWithoutEnter.watch(text, scanText); setScanText(text); }}
+                    onSubmitEditing={() => { scanWithoutEnter.cancel(); HandleScanField(); }}
                 />
             </View>
 

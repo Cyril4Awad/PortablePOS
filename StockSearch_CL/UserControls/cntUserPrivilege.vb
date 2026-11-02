@@ -15,11 +15,12 @@ Public Class cntUserPrivilege
 #Region "Declarations"
 
     Private cntTitle As String = "User Privilege"
+    Private dtUsers As DataTable
     Private dtPriv As DataTable
 
-    'The user of the grid : the combo is put back on it when the user cancels a change
+    'The user whose steps are shown in the grid : the users grid is put back on it when the user cancels a change
     Private shownUser As String = ""
-    Private loadingCombos As Boolean
+    Private loading As Boolean
 
 #End Region
 
@@ -30,25 +31,23 @@ Public Class cntUserPrivilege
 
             dtPriv = New DataTable
 
-            loadingCombos = True
+            loading = True
 
-            cmbUser.DataSource = GetTable(" SELECT userCode [code], userCode + ' - ' + userName [display]
-                                             FROM   V_CPP_Users
-                                             WHERE  userActive = 'Y'
-                                             ORDER BY userCode ")
-            cmbUser.ValueMember = "code"
-            cmbUser.DisplayMember = "display"
+            dtUsers = GetTable(" SELECT userCode [User Code], userName [User Name]
+                                 FROM   V_CPP_Users
+                                 WHERE  userActive = 'Y'
+                                 ORDER BY userCode ")
+            DesignUsersGrid()
 
-            cmbUser.SelectedIndex = -1
-            loadingCombos = False
+            loading = False
 
             LoadData()
-            CenterGrid()
+            CenterGrids()
 
-            Me.ActiveControl = cmbUser
+            Me.ActiveControl = LstUsers
 
         Catch ex As Exception
-            loadingCombos = False
+            loading = False
             MessageBox.Show("Error: " & ex.Message, cntTitle, MessageBoxButtons.OK, MessageBoxIcon.Error)
         End Try
     End Sub
@@ -66,23 +65,57 @@ Public Class cntUserPrivilege
         Return dt
     End Function
 
-    Private Sub cmb_SelectionChangeCommitted(sender As Object, e As EventArgs) Handles cmbUser.SelectionChangeCommitted
+    'The user of the selected row of the users grid ("" when none)
+    Private Function SelectedUser() As String
+        If dtUsers Is Nothing OrElse dtUsers.Rows.Count = 0 Then Return ""
+        Dim current As DataRowView = TryCast(Me.BindingContext(dtUsers).Current, DataRowView)
+        Return If(current Is Nothing, "", current("User Code").ToString)
+    End Function
+
+    Private Sub SelectUserRow(userCode As String)
+        If dtUsers Is Nothing OrElse dtUsers.Rows.Count = 0 Then Exit Sub
+
+        loading = True
+        Try
+            Dim idx As Integer = -1
+            For i As Integer = 0 To dtUsers.Rows.Count - 1
+                If dtUsers.Rows(i)("User Code").ToString.Equals(userCode, StringComparison.OrdinalIgnoreCase) Then
+                    idx = i
+                    Exit For
+                End If
+            Next
+            If idx >= 0 Then
+                Me.BindingContext(dtUsers).Position = idx
+            End If
+        Finally
+            loading = False
+        End Try
+    End Sub
+
+    Private Sub LstUsers_RowColChange(sender As Object, e As RowColChangeEventArgs) Handles LstUsers.RowColChange
         Try
 
-            If loadingCombos Then Exit Try
+            If loading OrElse SelectedUser() = shownUser Then Exit Try
 
             If Not ConfirmLeave() Then
-                loadingCombos = True
-                cmbUser.SelectedValue = shownUser
-                loadingCombos = False
+                SelectUserRow(shownUser)
                 Exit Try
             End If
 
             LoadData()
 
         Catch ex As Exception
-            loadingCombos = False
             MessageBox.Show("Error: " & ex.Message, cntTitle, MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub LstUsers_FilterChange(sender As Object, e As EventArgs) Handles LstUsers.FilterChange
+        Try
+
+            GridFilterChange(LstUsers)
+
+        Catch ex As Exception
+
         End Try
     End Sub
 
@@ -107,7 +140,7 @@ Public Class cntUserPrivilege
     Private Sub LoadData()
         Try
 
-            shownUser = If(cmbUser.SelectedValue?.ToString, "")
+            shownUser = SelectedUser()
 
             Using frmW As New ApplicationsDesign.frmWaiting
                 frmW.Show("Get Privileges")
@@ -140,6 +173,47 @@ Public Class cntUserPrivilege
         Catch ex As Exception
             Throw
         End Try
+    End Sub
+
+    Private Sub DesignUsersGrid()
+
+        With LstUsers
+            .DataSource = dtUsers
+            .ExtendRightColumn = False
+            .FilterBar = True
+            .FetchRowStyles = True
+            .AllowSort = False
+            .AllowUpdate = False
+            .AllowAddNew = False
+            .AllowDelete = False
+            .AlternatingRows = False
+            .EvenRowStyle.BackColor = Drawing.Color.White
+            .OddRowStyle.BackColor = Drawing.Color.White
+            .MarqueeStyle = MarqueeEnum.HighlightRow
+
+            With .Splits(0).DisplayColumns("User Code")
+                .HeadingStyle.HorizontalAlignment = AlignHorzEnum.Center
+                .Style.HorizontalAlignment = AlignHorzEnum.Center
+                .Style.VerticalAlignment = AlignVertEnum.Center
+                .Style.BackColor = Drawing.Color.White
+                .Locked = True
+                .AllowFocus = True
+                .Width = 70
+            End With
+
+            With .Splits(0).DisplayColumns("User Name")
+                .HeadingStyle.HorizontalAlignment = AlignHorzEnum.Center
+                .Style.HorizontalAlignment = AlignHorzEnum.Near
+                .Style.VerticalAlignment = AlignVertEnum.Center
+                .Style.BackColor = Drawing.Color.White
+                .Locked = True
+                .AllowFocus = True
+                .Width = 170
+            End With
+
+            SetGirdHeaders(LstUsers, dtUsers)
+        End With
+
     End Sub
 
     Private Sub DesignGrid()
@@ -225,23 +299,26 @@ Public Class cntUserPrivilege
         End Try
     End Sub
 
-    'The grid keeps the width of its columns and stays in the middle, the filters and buttons follow it
+    'The two grids keep the width of their columns and stay in the middle, the buttons follow the steps grid
     Private Sub cnt_Resize(sender As Object, e As EventArgs) Handles Me.Resize
         Try
 
-            CenterGrid()
+            CenterGrids()
 
         Catch ex As Exception
 
         End Try
     End Sub
 
-    Private Sub CenterGrid()
+    Private Sub CenterGrids()
 
-        LstPriv.Left = Math.Max(0, (Me.ClientSize.Width - LstPriv.Width) \ 2)
+        Const gap As Integer = 20
+        Dim totalWidth As Integer = LstUsers.Width + gap + LstPriv.Width
+        LstUsers.Left = Math.Max(0, (Me.ClientSize.Width - totalWidth) \ 2)
+        LstPriv.Left = LstUsers.Right + gap
 
-        Label7.Left = LstPriv.Left
-        cmbUser.Left = Label7.Right + 6
+        lblUsers.Left = LstUsers.Left
+        lblSteps.Left = LstPriv.Left
 
         btnAllowAll.Left = LstPriv.Left
         btnDenyAll.Left = btnAllowAll.Right + 6
@@ -250,6 +327,18 @@ Public Class cntUserPrivilege
         btnSave.Left = LstPriv.Right - btnSave.Width
 
     End Sub
+
+    'code / display for the duplicate dialog (same shape as the old user combo)
+    Private Function UsersForDuplicate() As DataTable
+        Dim dt As New DataTable
+        dt.Columns.Add("code", GetType(String))
+        dt.Columns.Add("display", GetType(String))
+        For Each row As DataRow In dtUsers.Rows
+            Dim code As String = row("User Code").ToString()
+            dt.Rows.Add(code, code & " - " & row("User Name").ToString())
+        Next
+        Return dt
+    End Function
 
 #End Region
 
@@ -331,7 +420,7 @@ Public Class cntUserPrivilege
 
             If shownUser = "" Then
                 ShowNotification(Me.ParentForm, "Please Choose The User", 3000, 12, DevComponents.DotNetBar.eToastPosition.MiddleCenter)
-                Me.ActiveControl = cmbUser
+                Me.ActiveControl = LstUsers
                 Exit Try
             End If
 
@@ -358,7 +447,7 @@ Public Class cntUserPrivilege
 
             If shownUser = "" Then
                 ShowNotification(Me.ParentForm, "Please Choose The User", 3000, 12, DevComponents.DotNetBar.eToastPosition.MiddleCenter)
-                Me.ActiveControl = cmbUser
+                Me.ActiveControl = LstUsers
                 Exit Try
             End If
 
@@ -376,7 +465,7 @@ Public Class cntUserPrivilege
             End If
 
             Dim targetUsers As List(Of String)
-            Using frmDup As New frmDuplicatePrivilege(shownUser, CType(cmbUser.DataSource, DataTable))
+            Using frmDup As New frmDuplicatePrivilege(shownUser, UsersForDuplicate())
                 If frmDup.ShowDialog(Me.ParentForm) <> DialogResult.OK Then Exit Try
                 targetUsers = frmDup.TargetUsers
             End Using

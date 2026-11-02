@@ -15,6 +15,7 @@ import PrintLabelCodePicker from '../components/lists/printLabel/PrintLabelCodeP
 import PrintLabelData from '../data/PrintLabelData';
 import { PlayScanOk, PlayScanError } from '../variables/PhysicalCountSounds';
 import { ItemRecIDFromLink } from '../variables/ItemLink';
+import { useScanWithoutEnter } from '../variables/ScanInput';
 import MessageBox from '../components/MessageBox';
 
 const MAX_QTY = 500;
@@ -26,6 +27,10 @@ const MAX_QTY = 500;
 const PrintLabelScreen = () => {
 
   const [scanner, setScanner] = useState('');
+  const scanWithoutEnter = useScanWithoutEnter(text => {
+    HandleScan(text);
+    setScanner('');
+  });
 
   // { itemRecID, itemReference, itemDescription, itemUnit, priceLC, currencyLC, priceCC, currencyCC }
   const [item, setItem] = useState(null);
@@ -367,7 +372,7 @@ const PrintLabelScreen = () => {
           ref={scannerInputControl}
           style={styles.scannerText}
           value={scanner}
-          onChangeText={setScanner}
+          onChangeText={text => { scanWithoutEnter.watch(text, scanner); setScanner(text); }}
           showSoftInputOnFocus={false}
           onPressIn={() => Keyboard.dismiss()}
           placeholder='Scan Item'
@@ -375,6 +380,7 @@ const PrintLabelScreen = () => {
           autoFocus={true}
           blurOnSubmit={false}
           onSubmitEditing={() => {
+            scanWithoutEnter.cancel();
             HandleScan(scanner);
             setScanner('');
           }}

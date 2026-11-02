@@ -2,7 +2,7 @@ SET QUOTED_IDENTIFIER ON
 SET ANSI_NULLS ON
 GO
 
--- The stock file downloaded by Free Receiving (active items only)
+-- The stock file downloaded by Free Receiving (active items sent to the POS only)
 CREATE OR ALTER VIEW V_CPP_ReceivingItems
 AS
     SELECT  STK_RECID [itemRecID] ,
@@ -16,7 +16,8 @@ AS
             LTRIM(RTRIM(ISNULL(STK_UNIT, ''))) [itemUnit]
     FROM    dbo.STK04_STKFIL
     WHERE   ISNULL(STK_ACTIVE, 'N') = 'Y'
-            AND STK_CurrentArchive = 'C';
+            AND STK_CurrentArchive = 'C'
+            AND ISNULL(STK_SendToPOS, 'N') = 'Y';
 
 
 GO

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, TextInput, StyleSheet, FlatList } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import SwitchSelector from 'react-native-switch-selector';
 import Colors from '../variables/Colors';
@@ -7,28 +7,27 @@ import Sizing from '../variables/Sizing';
 import { FontSize } from '../variables/ResponsiveFont';
 import FreeReceivingLine from '../components/lists/freeReceiving/FreeReceivingLine';
 import FreeReceivingItem from '../components/lists/freeReceiving/FreeReceivingItem';
-import FreeReceivingLineEditor from '../components/lists/freeReceiving/FreeReceivingLineEditor';
 import FreeReceivingDatabase from '../database/FreeReceivingDatabase';
 import { FormatQuantity, LIST_LIMIT } from '../variables/FreeReceivingRules';
+import { GetDraft, LoadDraft, StartDraft } from '../variables/ReceivingOrderDraft';
 import MessageBox from '../components/MessageBox';
 
-const COLLECTED = 0;
+const RECEIVED = 0;
 const STOCK_FILE = 1;
 
-// Collected items (tap one to change its qty or delete it, or delete them all) and the downloaded stock file
-const FreeReceivingItemsScreen = () => {
+// The items of the receiving orders saved on the device, not uploaded (tap one : its receiving order on the Receiving Order screen)
+// and the downloaded stock file (tap one : received on the scan screen)
+const FreeReceivingItemsScreen = ({ navigation }) => {
 
-  const [view, setView] = useState(COLLECTED);
+  const [view, setView] = useState(RECEIVED);
   const [searchString, setSearchString] = useState('');
   const [rows, setRows] = useState([]);
-  const [summary, setSummary] = useState({ lines: 0, qty: 0, pending: 0 });
-  const [decimals, setDecimals] = useState(0);
-  const [editedLine, setEditedLine] = useState(null);
+  const [summary, setSummary] = useState({ orders: 0, lines: 0, qty: 0, pending: 0, pendingOrders: 0 });
 
   const LoadRows = (shownView, text) => {
-    const request = shownView === COLLECTED
+    const request = shownView === RECEIVED
       ? FreeReceivingDatabase.GetLines(text, LIST_LIMIT)
-      : FreeReceivingDatabase.FindItems('any', text, false, LIST_LIMIT);
+      : FreeReceivingDatabase.SearchItems(text, LIST_LIMIT);
     request.then(setRows).catch(err => alert(err.message));
     FreeReceivingDatabase.GetLinesSummary().then(setSummary).catch(() => { });
   };
@@ -37,77 +36,57 @@ const FreeReceivingItemsScreen = () => {
 
   useFocusEffect(
     useCallback(() => {
-      FreeReceivingDatabase.GetInfo().then(info => setDecimals(info?.decimals ?? 0)).catch(() => { });
-    }, [])
+      LoadRows(view, searchString);
+    }, [view, searchString])
   );
 
   useEffect(() => {
     LoadRows(view, searchString);
   }, [view, searchString]);
 
-  const DeleteAll = () => {
-
-    if (summary.lines === 0) {
-      alert('No Collected Items Found');
-      return;
+  // The receiving order of the line on the Receiving Order screen : not uploaded = it can change (Save keeps it on the device and uploads it),
+  // uploaded = view only
+  const OpenOrder = async (line) => {
+    const order = await FreeReceivingDatabase.GetOrder(line.orderID);
+    if (!order) { Reload(); return; }
+    const open = () => {
+      if (order.state === 2) {
+        LoadDraft({ ...order.draft, mode: 'VIEW', roRecID: order.roRecID, savedLines: order.draft.lines, lines: [], orderID: order.orderID }, 'FREE');
+      }
+      else {
+        LoadDraft({ ...order.draft, mode: 'ADD', orderID: order.orderID }, 'FREE');
+      }
+      navigation.navigate('ReceivingOrderEdit', { free: true });
+    };
+    // A new receiving order being prepared (not saved on the device yet) would be lost
+    const current = GetDraft('FREE');
+    if (current && !current.orderID && current.mode === 'ADD' && current.lines.length > 0) {
+      MessageBox.alert('Free Receiving', `The receiving order being prepared (${current.lines.length} lines, not saved) will be cleared.`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open', style: 'destructive', onPress: open },
+      ]);
     }
-
-    const message = summary.pending > 0
-      ? `${summary.pending} of the ${summary.lines} collected lines are not uploaded. Do you want to delete all the collected items ?`
-      : `Do you want to delete the ${summary.lines} collected lines ?`;
-
-    MessageBox.alert('Delete Collected Items', message, [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Delete', style: 'destructive', onPress: () => {
-          FreeReceivingDatabase.DeleteAllLines()
-            .then(Reload)
-            .catch(err => alert(err.message));
-        }
-      },
-    ]);
-
+    else open();
   };
 
-  const DeleteLine = (line) => {
-    MessageBox.alert('Delete Line', `Do you want to delete ${line.itemReference} (${FormatQuantity(line.qty)}) ?`, [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Delete', style: 'destructive', onPress: () => {
-          setEditedLine(null);
-          FreeReceivingDatabase.DeleteLine(line.lineID)
-            .then(Reload)
-            .catch(err => alert(err.message));
-        }
-      },
-    ]);
+  // An item of the stock file : the scan screen with it (the new receiving order being prepared, or a new one)
+  const ReceiveItem = (item) => {
+    const current = GetDraft('FREE');
+    if (!current || current.orderID || current.mode === 'VIEW') StartDraft('ADD', null, 'FREE');
+    navigation.navigate('ReceivingOrderEdit', { free: true, pickItem: { itemRecID: item.itemRecID, itemReference: item.itemReference } });
   };
 
-  const RowItem = rowData => view === COLLECTED
-    ? <FreeReceivingLine line={rowData.item} onPress={() => setEditedLine(rowData.item)} />
-    : <FreeReceivingItem item={rowData.item} />;
+  const RowItem = rowData => view === RECEIVED
+    ? <FreeReceivingLine line={rowData.item} onPress={() => OpenOrder(rowData.item)} />
+    : <FreeReceivingItem item={rowData.item} onPress={() => ReceiveItem(rowData.item)} />;
 
   return (
     <View style={styles.container}>
 
-      <FreeReceivingLineEditor
-        line={editedLine}
-        decimals={decimals}
-        onSave={(qty) => {
-          const lineID = editedLine.lineID;
-          setEditedLine(null);
-          FreeReceivingDatabase.SetLineQty(lineID, qty)
-            .then(Reload)
-            .catch(err => alert(err.message));
-        }}
-        onDelete={() => DeleteLine(editedLine)}
-        onClose={() => setEditedLine(null)}
-      />
-
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchText}
-          placeholder={view === COLLECTED ? 'Search Collected Items' : 'Search Stock File'}
+          placeholder={view === RECEIVED ? 'Search Received Items' : 'Search Stock File'}
           maxLength={30}
           value={searchString}
           autoCorrect={false}
@@ -117,9 +96,9 @@ const FreeReceivingItemsScreen = () => {
 
       <FlatList
         data={rows}
-        keyExtractor={(item) => view === COLLECTED ? item.lineID.toString() : item.itemRecID}
+        keyExtractor={(item) => view === RECEIVED ? `${item.orderID}-${item.lineNo}` : item.itemRecID}
         renderItem={RowItem}
-        ListEmptyComponent={<Text style={styles.emptyText}>{view === COLLECTED ? 'No Collected Items' : 'No Items Found'}</Text>}
+        ListEmptyComponent={<Text style={styles.emptyText}>{view === RECEIVED ? 'No Received Items' : 'No Items Found'}</Text>}
       />
 
       {rows.length === LIST_LIMIT ?
@@ -128,14 +107,12 @@ const FreeReceivingItemsScreen = () => {
 
       <View style={styles.footerContainer}>
 
-        {view === COLLECTED ?
+        {view === RECEIVED ?
           <View style={styles.collectedRow}>
             <Text style={styles.summaryText} numberOfLines={1}>
-              {summary.lines} Lines  ·  Qty {FormatQuantity(summary.qty)}
+              {summary.lines} Received  ·  Qty {FormatQuantity(Math.round(summary.qty * 1000))}
+              {summary.pendingOrders > 0 ? <Text style={styles.pendingText}>  ·  to upload</Text> : ''}
             </Text>
-            <TouchableOpacity style={[styles.deleteButton, { opacity: summary.lines === 0 ? 0.5 : 1 }]} onPress={DeleteAll}>
-              <Text style={styles.deleteButtonText}>Delete Collected</Text>
-            </TouchableOpacity>
           </View> :
           <></>}
 
@@ -148,7 +125,7 @@ const FreeReceivingItemsScreen = () => {
           borderColor={Colors.brandBlue}
           hasPadding={true}
           options={[
-            { label: 'Collected Items', value: COLLECTED },
+            { label: 'Received Items', value: RECEIVED },
             { label: 'Stock File', value: STOCK_FILE }
           ]}
         />
@@ -213,17 +190,8 @@ const styles = StyleSheet.create({
     fontSize: FontSize(15),
     fontWeight: 'bold',
   },
-  deleteButton: {
-    height: 40,
-    paddingHorizontal: 15,
-    borderRadius: 15,
-    backgroundColor: 'red',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  deleteButtonText: {
-    color: 'white',
-    fontSize: FontSize(15),
+  pendingText: {
+    color: 'red',
   },
 });
 

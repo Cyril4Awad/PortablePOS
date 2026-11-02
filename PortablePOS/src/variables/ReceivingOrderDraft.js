@@ -7,22 +7,24 @@ import { TodayISO } from './ReceivingOrderRules';
 // lines : the new lines { lineID, itemRecID, itemReference, itemDescription, itemClass, itemUnit, itemQtyControl, supplierRef,
 //         lineStatus, qty, lots: [{ lotID, expiry, batch, production, qty, barcodes }], barcodes, poQty }
 // savedLines : the lines already saved (MODIFY, CANCEL, VIEW), read only
-// A receiving order opened to view (VIEW) is kept apart (view = true) : the one being prepared stays
+// Slots : RO the one being prepared, VIEW a receiving order opened to view (the one being prepared stays),
+//         FREE the receiving order of Free Receiving (orderID : its number on the device once saved there)
+// The functions take the slot, or true / false for VIEW / RO
 
-let draft = null;
-let viewed = null;
+const slots = { RO: null, VIEW: null, FREE: null };
+const listeners = { RO: new Set(), VIEW: new Set(), FREE: new Set() };
 let lastID = 0;
-const listeners = new Set();
-const viewListeners = new Set();
 
-const notify = () => listeners.forEach(listener => listener(draft));
-const notifyView = () => viewListeners.forEach(listener => listener(viewed));
+const slotOf = (slot) => slot === true ? 'VIEW' : (slot === false || slot === undefined || slot === null) ? 'RO' : slot;
+
+const notify = (slot) => listeners[slot].forEach(listener => listener(slots[slot]));
 
 export const NextID = () => ++lastID;
 
-export const GetDraft = (view = false) => view ? viewed : draft;
+export const GetDraft = (slot = false) => slots[slotOf(slot)];
 
-export const StartDraft = (mode, receivingOrder = null) => {
+// slot : RO by default, a VIEW receiving order goes in the VIEW slot
+export const StartDraft = (mode, receivingOrder = null, slot = 'RO') => {
 
     const savedLines = (receivingOrder?.lines ?? []).map(line => ({
         ...line,
@@ -46,43 +48,45 @@ export const StartDraft = (mode, receivingOrder = null) => {
         lines: [],
         savedLines,
     };
-    if (mode === 'VIEW') {
-        viewed = started;
-        notifyView();
-    }
-    else {
-        draft = started;
-        notify();
-    }
+    const target = mode === 'VIEW' && slot === 'RO' ? 'VIEW' : slotOf(slot);
+    slots[target] = started;
+    notify(target);
     return started;
 };
 
-export const ClearDraft = (view = false) => {
-    if (view) {
-        viewed = null;
-        notifyView();
-        return;
-    }
-    draft = null;
-    notify();
+// A draft kept elsewhere (a receiving order saved on the device by Free Receiving) opened again : its ids are renewed
+export const LoadDraft = (saved, slot) => {
+    const target = slotOf(slot);
+    const renew = (line) => ({ ...line, lineID: NextID(), lots: (line.lots ?? []).map(lot => ({ ...lot, lotID: NextID() })) });
+    slots[target] = { ...saved, lines: (saved.lines ?? []).map(renew), savedLines: (saved.savedLines ?? []).map(renew) };
+    notify(target);
+    return slots[target];
 };
 
-export const UpdateDraft = (changes) => {
-    if (!draft) return;
-    draft = { ...draft, ...(typeof changes === 'function' ? changes(draft) : changes) };
-    notify();
+export const ClearDraft = (slot = false) => {
+    const target = slotOf(slot);
+    slots[target] = null;
+    notify(target);
 };
 
-export const SetLines = (change) => UpdateDraft(current => ({ lines: change(current.lines) }));
+export const UpdateDraft = (changes, slot = 'RO') => {
+    const target = slotOf(slot);
+    const current = slots[target];
+    if (!current) return;
+    slots[target] = { ...current, ...(typeof changes === 'function' ? changes(current) : changes) };
+    notify(target);
+};
 
-// The draft (view : the receiving order viewed) in a component, refreshed on every change
-export const useReceivingOrderDraft = (view = false) => {
-    const [value, setValue] = useState(GetDraft(view));
+export const SetLines = (change, slot = 'RO') => UpdateDraft(current => ({ lines: change(current.lines) }), slot);
+
+// The draft of a slot in a component, refreshed on every change
+export const useReceivingOrderDraft = (slot = false) => {
+    const target = slotOf(slot);
+    const [value, setValue] = useState(slots[target]);
     useEffect(() => {
-        const set = view ? viewListeners : listeners;
-        setValue(GetDraft(view));
-        set.add(setValue);
-        return () => set.delete(setValue);
-    }, [view]);
+        setValue(slots[target]);
+        listeners[target].add(setValue);
+        return () => listeners[target].delete(setValue);
+    }, [target]);
     return value;
 };

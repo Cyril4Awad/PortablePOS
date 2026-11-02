@@ -14,7 +14,7 @@ const FILTERS = [
 
 // The suppliers search of the Receiving Order (the suppliers the user can purchase from) : like the stock search,
 // any part of the code, name or country (several words), local / foreign
-// props : visible, selectedRecID, onPick(supplier), onClose
+// props : visible, selectedRecID, onPick(supplier), onClose, data (the data of the screen, ReceivingOrderData by default : Free Receiving offline the device)
 const ROSupplierPicker = props => {
 
     const [suppliers, setSuppliers] = useState([]);
@@ -26,7 +26,7 @@ const ROSupplierPicker = props => {
     const Load = () => {
         setIsLoading(true);
         setError('');
-        ReceivingOrderData.GetSuppliers()
+        (props.data ?? ReceivingOrderData).GetSuppliers()
             .then(rows => setSuppliers(rows))
             .catch(err => setError(err.message))
             .finally(() => setIsLoading(false));

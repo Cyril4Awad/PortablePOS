@@ -6677,28 +6677,36 @@ Public Class DataService
 #Region "Free Receiving"
 
     'The device downloads the whole stock file (V_CPP_ReceivingItems), the codes and the suppliers, then receives offline
+    'Only the items a Receiving Order can receive (V_CPP_ROItems), the upload saves a Receiving Order (SaveFreeReceiving)
     'The pages follow the record id (afterRecID = the last one stored), so a download can continue where it stopped
     Private Const ReceivingMaxPageSize As Integer = 5000
 
-    'Counts of the download and the decimals of the quantities (SP_DecNo), also the connection test of the settings
-    'Returns {itemsCount, barcodesCount, supplierRefsCount, suppliersCount, decimals}
+    'Counts of the download and the decimals of the quantities (SP_DecNo)
+    'Returns {itemsCount, barcodesCount, supplierRefsCount, suppliersCount, lotsCount, decimals, currencyCC}
     Public Function GetReceivingInfo() As String Implements IDataService.GetReceivingInfo
 
         Try
 
             Using dtInfo As New DataTable
 
-                Using daSql As New SqlDataAdapter(" SELECT  ( SELECT COUNT(*) FROM V_CPP_ReceivingItems ) itemsCount ,
+                Using daSql As New SqlDataAdapter(" SELECT  ( SELECT COUNT(*) FROM V_CPP_ReceivingItems R INNER JOIN V_CPP_ROItems I ON I.itemRecID = R.itemRecID ) itemsCount ,
                                                             ( SELECT COUNT(*) FROM V_CPP_ReceivingItemCodes WHERE codeKind = 'barcode' ) barcodesCount ,
                                                             ( SELECT COUNT(*) FROM V_CPP_ReceivingItemCodes WHERE codeKind = 'supplierRef' ) supplierRefsCount ,
                                                             ( SELECT COUNT(*) FROM V_CPP_ReceivingSuppliers ) suppliersCount ,
+                                                            ( SELECT COUNT(*) FROM V_CPP_StockQty WHERE " & ReceivingLotsCondition & " ) lotsCount ,
                                                             ( SELECT TOP 1 ISNULL(CONVERT(VARCHAR, SP_DecNo), '0') FROM dbo.stk04_SysParam ) decimals ",
                                                   DecryptString(ServerSent.lcConSql, DecPS("REDACTED")))
                     daSql.SelectCommand.CommandTimeout = 600
+                    daSql.SelectCommand.Parameters.Add("@Location", SqlDbType.VarChar, 10).Value = If(LocCode, "").Trim
                     daSql.Fill(dtInfo)
                 End Using
 
-                Return New JavaScriptSerializer().Serialize(LabelRows(dtInfo)(0))
+                Dim info As Dictionary(Of String, Object) = LabelRows(dtInfo)(0)
+                Using cnsql As New SqlConnection(ROConnectionString())
+                    cnsql.Open()
+                    info("currencyCC") = ROGetSettings(cnsql, Nothing).CurrencyCC
+                End Using
+                Return New JavaScriptSerializer().Serialize(info)
 
             End Using
 
@@ -6717,18 +6725,28 @@ Public Class DataService
             Dim errorMessage As String = ReceivingPageCheck(afterRecID, pageSize, after)
             If errorMessage <> "" Then Return "Error " & errorMessage
 
-            Return ReceivingPage($" SELECT TOP {pageSize} CONVERT(VARCHAR(18), itemRecID) itemRecID ,
-                                                       itemReference ,
-                                                       itemDescription ,
-                                                       itemSupplier ,
-                                                       itemCategory ,
-                                                       itemSerie ,
-                                                       itemSingleRef1 ,
-                                                       itemSingleRef2 ,
-                                                       itemUnit
-                                     FROM     V_CPP_ReceivingItems
-                                     WHERE    itemRecID > @After
-                                     ORDER BY itemRecID ", after, "")
+            Return ReceivingPage($" SELECT TOP {pageSize} CONVERT(VARCHAR(18), R.itemRecID) itemRecID ,
+                                                       R.itemReference ,
+                                                       R.itemDescription ,
+                                                       R.itemSupplier ,
+                                                       R.itemCategory ,
+                                                       R.itemSerie ,
+                                                       R.itemSingleRef1 ,
+                                                       R.itemSingleRef2 ,
+                                                       I.itemUnit ,
+                                                       I.itemClass ,
+                                                       I.itemSubUnit ,
+                                                       I.itemVatType ,
+                                                       CONVERT(VARCHAR(30), I.itemCostCC) itemCostCC ,
+                                                       I.itemQtyControl ,
+                                                       I.itemMeasType ,
+                                                       CONVERT(VARCHAR(30), I.itemConsFactor) itemConsFactor ,
+                                                       CASE WHEN I.itemHaltPurchase = 'Y' AND I.itemHaltTill > CONVERT(DATE, GETDATE()) THEN 1 ELSE 0 END itemHalted ,
+                                                       ISNULL(CONVERT(VARCHAR(10), I.itemBBFDate, 120), '') itemBBFDate
+                                     FROM     V_CPP_ReceivingItems R
+                                              INNER JOIN V_CPP_ROItems I ON I.itemRecID = R.itemRecID
+                                     WHERE    R.itemRecID > @After
+                                     ORDER BY R.itemRecID ", after, "")
 
         Catch ex As Exception
             Return "Error " & ex.Message
@@ -6750,11 +6768,44 @@ Public Class DataService
             Return ReceivingPage($" SELECT TOP {pageSize} CONVERT(VARCHAR(18), codeRecID) codeRecID ,
                                                        CONVERT(VARCHAR(18), itemRecID) itemRecID ,
                                                        codeValue ,
-                                                       CONVERT(VARCHAR(18), codeSupplierRecID) supplierRecID
+                                                       CONVERT(VARCHAR(18), codeSupplierRecID) supplierRecID ,
+                                                       codeExpiry ,
+                                                       codeBatch
                                      FROM     V_CPP_ReceivingItemCodes
                                      WHERE    codeKind = @CodeKind
                                               AND codeRecID > @After
                                      ORDER BY codeRecID ", after, codeKind)
+
+        Catch ex As Exception
+            Return "Error " & ex.Message
+        End Try
+
+    End Function
+
+    'The lots of the expiry items for the lot window (GetROItemLots) : the ones of the location of the server with their available qty,
+    'and the ones known on location 00 with their production date
+    Private Const ReceivingLotsCondition As String = " ISNULL(stockExpiry, '') <> '' AND ( locationCode = @Location OR ( locationCode = '00' AND ISNULL(stockBatch, '') <> '' ) ) "
+
+    'afterRecID : "" for the first page, else the last lotRecID stored, returns "" after the last page
+    Public Function GetReceivingLots(afterRecID As String, pageSize As Integer) As String Implements IDataService.GetReceivingLots
+
+        Try
+
+            Dim after As Decimal
+            Dim errorMessage As String = ReceivingPageCheck(afterRecID, pageSize, after)
+            If errorMessage <> "" Then Return "Error " & errorMessage
+
+            Return ReceivingPage($" SELECT TOP {pageSize} CONVERT(VARCHAR(18), stockRecID) lotRecID ,
+                                                       CONVERT(VARCHAR(18), itemRecID) itemRecID ,
+                                                       LTRIM(RTRIM(locationCode)) locationCode ,
+                                                       ISNULL(stockExpiry, '') lotExpiry ,
+                                                       ISNULL(stockBatch, '') lotBatch ,
+                                                       ISNULL(stockProductionDate, '') lotProduction ,
+                                                       CONVERT(VARCHAR(30), ISNULL(stockAvailable, 0) - ISNULL(stockReserved, 0) - ISNULL(stockTransferOut, 0)) lotAvailable
+                                     FROM     V_CPP_StockQty
+                                     WHERE    {ReceivingLotsCondition}
+                                              AND stockRecID > @After
+                                     ORDER BY stockRecID ", after, "")
 
         Catch ex As Exception
             Return "Error " & ex.Message
@@ -6777,6 +6828,129 @@ Public Class DataService
         Catch ex As Exception
             Return "Error " & ex.Message
         End Try
+
+    End Function
+
+    'Saves the receiving orders of Free Receiving (prepared on the Receiving Order screens, kept on the device when offline)
+    'like SaveReceivingOrder in mode ADD (ROSave), all of them in ONE transaction : all are saved or none (the first error is returned)
+    'receivingOrders : [{orderName, receivingOrder}] receivingOrder = the receiving order of SaveReceivingOrder
+    '                  {supplierRecID, roRef, roDate, roActualDate, locationCode, poRecID, lines}, orderName : shown in the error
+    'An order sent again because no answer came back (an RO saved before this upload with the same supplier, ref, date, user, lines, items and qty)
+    'is not saved twice, its RO # is returned. Two orders of the upload with the same supplier and RO Ref # are refused
+    'Returns [{roRecID, already}, ...] in the order sent
+    Public Function SaveFreeReceiving(userCode As String, receivingOrders As String) As String Implements IDataService.SaveFreeReceiving
+
+        Try
+
+            Dim user As String = If(userCode, "").Trim.ToUpper
+            If user = "" Then Return "Error Missing User"
+            Dim orders As JArray = JArray.Parse(If(receivingOrders, "[]"))
+            If orders.Count = 0 Then Return "Error No Receiving Order To Upload"
+
+            Using cnsql As New SqlConnection(ROConnectionString())
+
+                cnsql.Open()
+
+                Using trnsql As SqlTransaction = cnsql.BeginTransaction
+
+                    Try
+
+                        'The receiving orders saved before this upload : the ones an order sent again can be
+                        Dim lastBefore As Object = ROScalar(cnsql, trnsql, " SELECT MAX(DOH_Recid) FROM dbo.stk04_PurDelOrdH WITH ( UPDLOCK, HOLDLOCK ) ")
+                        Dim savedBefore As Decimal = If(lastBefore Is Nothing OrElse IsDBNull(lastBefore), 0D, CDec(lastBefore))
+
+                        Dim results As New JArray
+                        Dim refs As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                        For Each sent As JObject In orders
+                            Dim orderName As String = If(sent.Value(Of String)("orderName"), "").Trim
+                            Dim order As JObject = TryCast(sent("receivingOrder"), JObject)
+                            If order Is Nothing Then
+                                trnsql.Rollback()
+                                Return $"Error {orderName} : Missing Receiving Order"
+                            End If
+                            If Not refs.Add(If(order.Value(Of String)("supplierRecID"), "").Trim & "|" & If(order.Value(Of String)("roRef"), "").Trim) Then
+                                trnsql.Rollback()
+                                Return $"Error {orderName} : The Same RO Ref. # Is Twice In The Upload For This Supplier"
+                            End If
+                            Dim result As String = FreeReceivingSaveOrder(cnsql, trnsql, user, order, savedBefore)
+                            If result.StartsWith("Error") Then
+                                trnsql.Rollback()
+                                Return $"Error {orderName} : {result.Substring(6)}"
+                            End If
+                            Dim parts() As String = result.Split("|"c)
+                            results.Add(New JObject From {{"roRecID", parts(1)}, {"already", parts.Length > 2 AndAlso parts(2) = "already"}})
+                        Next
+
+                        trnsql.Commit()
+                        Return results.ToString(Newtonsoft.Json.Formatting.None)
+
+                    Catch
+                        Try
+                            trnsql.Rollback()
+                        Catch exTRN As Exception
+                        End Try
+                        Throw
+                    End Try
+
+                End Using
+
+            End Using
+
+        Catch ex As Exception
+            Return ROErrorMessage(ex)
+        End Try
+
+    End Function
+
+    'One receiving order of SaveFreeReceiving in its transaction : "Success|roRecID", "Success|roRecID|already" or "Error ..."
+    'savedBefore : the last receiving order saved before the upload (an order sent again is one of them)
+    Private Function FreeReceivingSaveOrder(cnsql As SqlConnection, trnsql As SqlTransaction, user As String, order As JObject, savedBefore As Decimal) As String
+
+        'Received on the location of the server
+        Dim location As String = If(order.Value(Of String)("locationCode"), "").Trim
+        If location.ToUpper <> If(LocCode, "").Trim.ToUpper Then
+            Return $"Error The location of the server is {LocCode.Trim}, the receiving was done on location {location}"
+        End If
+
+        Dim supplier As Decimal
+        If Not Decimal.TryParse(If(order.Value(Of String)("supplierRecID"), "").Trim, supplier) Then Return "Error You Should Choose A Supplier"
+        Dim roRef As String = If(order.Value(Of String)("roRef"), "").Trim
+        Dim receivingDate As Date
+        If Not ROParseDate(order.Value(Of String)("roDate"), receivingDate) Then Return "Error Date Can Not Be Null"
+
+        Dim lines As JArray = If(TryCast(order("lines"), JArray), New JArray)
+        Dim totalQty As Decimal = 0
+        'The items and their qty (sum of item x qty) : an RO of the same size with other items is not this order
+        Dim itemsQty As Decimal = 0
+        For Each line As JObject In lines
+            Dim qty As Decimal
+            Decimal.TryParse(If(line.Value(Of String)("qty"), "").Trim, Globalization.NumberStyles.Number, Globalization.CultureInfo.InvariantCulture, qty)
+            totalQty += qty
+            Dim lineItem As Decimal
+            If Decimal.TryParse(If(line.Value(Of String)("itemRecID"), "").Trim, lineItem) Then itemsQty += lineItem * qty
+
+            'Only the items sent to the POS (a pending item is created by the save)
+            If If(line.Value(Of String)("pending"), "").Trim.ToLower = "true" Then Continue For
+            Dim itemRecID As Decimal
+            If Not Decimal.TryParse(If(line.Value(Of String)("itemRecID"), "").Trim, itemRecID) Then Return "Error Item Code Cannot Be Empty"
+            Dim notSent As Object = ROScalar(cnsql, trnsql, " SELECT TOP 1 itemReference FROM V_CPP_ROItems WHERE itemRecID = @ItemRecID AND itemSendToPOS <> 'Y' ",
+                                             ROParam("@ItemRecID", itemRecID))
+            If notSent IsNot Nothing AndAlso notSent IsNot DBNull.Value Then Return $"Error {notSent} : The Item Is Not Sent To The POS"
+        Next
+
+        'Already saved by an upload that got no answer (before this upload)
+        Dim saved As Object = ROScalar(cnsql, trnsql, " SELECT TOP 1 H.roRecID FROM V_CPP_ROHeaders H
+                                                        WHERE  H.roRecID <= @SavedBefore
+                                                               AND H.supplierRecID = @SupplierRecID AND UPPER(H.roRef) = UPPER(@RORef) AND H.roDate = @RODate
+                                                               AND H.roStatus = 'N' AND H.roType = 'T' AND UPPER(H.roCreateUser) = @User
+                                                               AND ( SELECT COUNT(*) FROM V_CPP_ROLines D WHERE D.roRecID = H.roRecID ) = @Lines
+                                                               AND ( SELECT SUM(D.lineQty) FROM V_CPP_ROLines D WHERE D.roRecID = H.roRecID ) = @Qty
+                                                               AND ( SELECT SUM(D.itemRecID * D.lineQty) FROM V_CPP_ROLines D WHERE D.roRecID = H.roRecID ) = @ItemsQty ",
+                                       ROParam("@SavedBefore", savedBefore), ROParam("@SupplierRecID", supplier), ROParam("@RORef", roRef), ROParam("@RODate", receivingDate),
+                                       ROParam("@User", user), ROParam("@Lines", lines.Count), ROParam("@Qty", totalQty), ROParam("@ItemsQty", itemsQty))
+        If saved IsNot Nothing AndAlso saved IsNot DBNull.Value Then Return "Success|" & CDec(saved).ToString("0") & "|already"
+
+        Return ROSave(cnsql, trnsql, user, "ADD", order)
 
     End Function
 
@@ -6807,6 +6981,7 @@ Public Class DataService
                 cmsql.CommandTimeout = 600
                 cmsql.Parameters.Add("@After", SqlDbType.Decimal).Value = after
                 cmsql.Parameters.Add("@CodeKind", SqlDbType.VarChar, 20).Value = codeKind
+                cmsql.Parameters.Add("@Location", SqlDbType.VarChar, 10).Value = If(LocCode, "").Trim
 
                 Using dtRows As New DataTable
 
@@ -8164,7 +8339,7 @@ Public Class DataService
 
                 cnsql.Open()
 
-                Dim dtItems As DataTable = RORead(cnsql, Nothing, $" SELECT  {ROItemColumns} , C.codeType , C.codeExpiry , C.codeBatch , C.itemCode ,
+                Dim dtItems As DataTable = RORead(cnsql, Nothing, $" SELECT  {ROItemColumns} , I.itemSendToPOS , C.codeType , C.codeExpiry , C.codeBatch , C.itemCode ,
                                                                              ( SELECT TOP 1 LTRIM(RTRIM(R.supplierRef)) FROM V_CPP_ItemSupplierRefs R
                                                                                WHERE R.itemRecID = I.itemRecID AND R.supplierRecID = @SupplierRecID AND ISNULL(R.supplierRef, '') <> ''
                                                                                ORDER BY R.refRecID ) [itemSupplierRef]
@@ -8238,7 +8413,8 @@ Public Class DataService
             {"codeExpiry", ""},
             {"codeBatch", ""},
             {"isPending", If(isPending, 1, 0)},
-            {"blockMessage", ROItemBlock(row, receivingDate)}
+            {"blockMessage", ROItemBlock(row, receivingDate)},
+            {"itemSendToPOS", If(row.Table.Columns.Contains("itemSendToPOS"), row("itemSendToPOS").ToString, "")}
         }
     End Function
 
@@ -8444,6 +8620,7 @@ Public Class DataService
     End Function
 
     'The lines of a purchase order with the qty still to receive (FillGridDetails of FrmDO), only the stock items the user can receive
+    '(V_CPP_ROPurchaseOrderItems : the inactive and archived items too, like FrmDO)
     'Returns {lines: [{poLineNo, supplierRef, lineStatus, remainingQty, unitCost, item...}], skipped: lines left out (pending items, no privilege)}
     Public Function GetROPurchaseOrderLines(userCode As String, supplierRecID As String, poRecID As String, roDate As String) As String Implements IDataService.GetROPurchaseOrderLines
 
@@ -8465,7 +8642,7 @@ Public Class DataService
                 'The stock items, and the items of the pending stock file (created when the RO is saved)
                 Dim dtLines As DataTable = RORead(cnsql, Nothing, $" SELECT  POL.poLineNo , POL.supplierRef , POL.lineStatus , POL.remainingQty , POL.unitCost , 0 [isPending] , {ROItemColumns}
                                                                      FROM    V_CPP_ROPurchaseOrderLines POL
-                                                                             INNER JOIN V_CPP_ROItems I ON I.itemRecID = POL.itemRecID
+                                                                             INNER JOIN V_CPP_ROPurchaseOrderItems I ON I.itemRecID = POL.itemRecID
                                                                      WHERE   POL.poRecID = @PORecID AND POL.remainingQty > 0 {ROItemAccess(userCode, "I")}
                                                                      UNION ALL
                                                                      SELECT  POL.poLineNo , POL.supplierRef , POL.lineStatus , POL.remainingQty , POL.unitCost , 1 [isPending] , {ROItemColumns}
@@ -8609,7 +8786,7 @@ Public Class DataService
                                                                            ISNULL(I.itemUnit, '') [itemUnit] , ISNULL(I.itemBarcode, '') [itemBarcode] ,
                                                                            ISNULL(I.itemMeasType, 'P') [itemMeasType] , ISNULL(I.itemConsFactor, 1) [itemConsFactor] , ISNULL(I.itemSubUnit, '') [itemSubUnit]
                                                                    FROM    V_CPP_ROLines D
-                                                                           LEFT JOIN V_CPP_ROItems I ON I.itemRecID = D.itemRecID
+                                                                           LEFT JOIN V_CPP_ROPurchaseOrderItems I ON I.itemRecID = D.itemRecID
                                                                    WHERE   D.roRecID = @RORecID
                                                                    ORDER BY D.lineRecID ",
                                                   ROParam("@RORecID", receivingOrder))
@@ -8839,17 +9016,22 @@ Public Class DataService
             End Using
 
         Catch ex As Exception
-            Dim message As String = ex.Message
-            If message.IndexOf("IX_stk04_PurDelOrdH", StringComparison.OrdinalIgnoreCase) >= 0 Then
-                Return "Error Same RO Ref. # And Date Already Exist For This Supplier, Change Them To Save."
-            ElseIf message.IndexOf("duplicate key", StringComparison.OrdinalIgnoreCase) >= 0 Then
-                Return "Error This Record Is Already Added By Another User, Please Save Again."
-            ElseIf message.IndexOf("deadlock", StringComparison.OrdinalIgnoreCase) >= 0 Then
-                Return "Error Saving Failed. Please Try Again."
-            End If
-            Return "Error " & message
+            Return ROErrorMessage(ex)
         End Try
 
+    End Function
+
+    'The message of an RO save that failed (SaveReceivingOrder, SaveFreeReceiving)
+    Private Function ROErrorMessage(ex As Exception) As String
+        Dim message As String = ex.Message
+        If message.IndexOf("IX_stk04_PurDelOrdH", StringComparison.OrdinalIgnoreCase) >= 0 Then
+            Return "Error Same RO Ref. # And Date Already Exist For This Supplier, Change Them To Save."
+        ElseIf message.IndexOf("duplicate key", StringComparison.OrdinalIgnoreCase) >= 0 Then
+            Return "Error This Record Is Already Added By Another User, Please Save Again."
+        ElseIf message.IndexOf("deadlock", StringComparison.OrdinalIgnoreCase) >= 0 Then
+            Return "Error Saving Failed. Please Try Again."
+        End If
+        Return "Error " & message
     End Function
 
     Private Function ROSave(cnsql As SqlConnection, trnsql As SqlTransaction, user As String, mode As String, order As JObject) As String
@@ -8967,11 +9149,18 @@ Public Class DataService
                 line.IsPending = If(lineToken.Value(Of String)("pending"), "").Trim.ToLower = "true"
                 If line.IsPending Then line.PendingRecID = line.ItemRecID
 
-                Dim dtItem As DataTable = RORead(cnsql, trnsql, $" SELECT {ROItemColumns} , I.itemCurrency , I.itemUnitCode , I.itemUnitPack , I.itemOperator , I.itemMeasSign ,
+                Dim readItem = Function(view As String, condition As String) As DataTable
+                                   Return RORead(cnsql, trnsql, $" SELECT {ROItemColumns} , I.itemCurrency , I.itemUnitCode , I.itemUnitPack , I.itemOperator , I.itemMeasSign ,
                                                                           I.itemMeasValue , I.itemReturnSale
-                                                                  FROM   {If(line.IsPending, "V_CPP_ROPendingItems", "V_CPP_ROItems")} I
-                                                                  WHERE  I.itemRecID = @ItemRecID {ROItemAccess(user, "I")} ",
-                                                  ROUserParams(user, ROParam("@ItemRecID", line.ItemRecID)))
+                                                                  FROM   {view} I
+                                                                  WHERE  I.itemRecID = @ItemRecID {condition} {ROItemAccess(user, "I")} ",
+                                                 ROUserParams(user, ROParam("@ItemRecID", line.ItemRecID), ROParam("@PORecID", purchaseOrder)))
+                               End Function
+                Dim dtItem As DataTable = readItem(If(line.IsPending, "V_CPP_ROPendingItems", "V_CPP_ROItems"), "")
+                'An item of the PO lines, inactive or archived too (the PO import of FrmDO takes them)
+                If dtItem.Rows.Count = 0 AndAlso Not line.IsPending AndAlso purchaseOrder <> 0 Then
+                    dtItem = readItem("V_CPP_ROPurchaseOrderItems", " AND EXISTS ( SELECT TOP 1 1 FROM V_CPP_ROPurchaseOrderLines POL WHERE POL.poRecID = @PORecID AND POL.itemRecID = I.itemRecID ) ")
+                End If
                 If dtItem.Rows.Count = 0 Then
                     Return If(line.IsPending, "Error An Item Of The Pending Stock File Is Not There Any More (Created Or Removed), Remove Its Line",
                                               "Error An Item Of The Lines Cannot Be Received (Inactive, Archived Or No Privilege)")
@@ -9140,7 +9329,7 @@ Public Class DataService
 
             'The lines, lots and barcodes of the RO copied to the reverse RO
             Dim dtLines As DataTable = RORead(cnsql, trnsql, " SELECT D.* , ISNULL(I.itemClass, '') [itemClass] , ISNULL(I.itemQtyControl, 'N') [itemQtyControl]
-                                                               FROM V_CPP_ROLines D LEFT JOIN V_CPP_ROItems I ON I.itemRecID = D.itemRecID
+                                                               FROM V_CPP_ROLines D LEFT JOIN V_CPP_ROPurchaseOrderItems I ON I.itemRecID = D.itemRecID
                                                                WHERE D.roRecID = @RORecID ORDER BY D.lineRecID ",
                                               ROParam("@RORecID", receivingOrder))
 
@@ -9378,7 +9567,7 @@ Public Class DataService
                                                     AND ISNULL(stockExpiry, '') = @Expiry AND ISNULL(stockBatch, '') = @Batch AND ISNULL(stockAvailable, 0) + @Qty < 0 ",
                             ROParam("@ItemRecID", item), ROParam("@LocationCode", locationCode), ROParam("@Expiry", expiry),
                             ROParam("@Batch", batch), ROParam("@Qty", qty)).ToString <> "0" Then
-                    Return "Error Exists Item With No Available Qty (" & ROScalar(cnsql, trnsql, " SELECT TOP 1 itemReference FROM V_CPP_ROItems WHERE itemRecID = @ItemRecID ", ROParam("@ItemRecID", item))?.ToString & ")"
+                    Return "Error Exists Item With No Available Qty (" & ROScalar(cnsql, trnsql, " SELECT TOP 1 itemReference FROM V_CPP_ROPurchaseOrderItems WHERE itemRecID = @ItemRecID ", ROParam("@ItemRecID", item))?.ToString & ")"
                 End If
             End If
 
