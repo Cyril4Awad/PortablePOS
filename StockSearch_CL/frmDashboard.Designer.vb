@@ -28,6 +28,7 @@ Partial Class frmDashboard
         Me.btnPotentialClients = New System.Windows.Forms.Button()
         Me.Panel1 = New System.Windows.Forms.Panel()
         Me.btnNegations = New System.Windows.Forms.Button()
+        Me.btnDeliveryProof = New System.Windows.Forms.Button()
         Me.btnUserPrivilege = New System.Windows.Forms.Button()
         Me.btnMissingItems = New System.Windows.Forms.Button()
         Me.pnlContainer = New System.Windows.Forms.Panel()
@@ -83,6 +84,7 @@ Partial Class frmDashboard
         'Panel1
         '
         Me.Panel1.BackColor = System.Drawing.Color.White
+        Me.Panel1.Controls.Add(Me.btnDeliveryProof)
         Me.Panel1.Controls.Add(Me.btnNegations)
         Me.Panel1.Controls.Add(Me.btnUserPrivilege)
         Me.Panel1.Controls.Add(Me.btnMissingItems)
@@ -110,6 +112,25 @@ Partial Class frmDashboard
         Me.btnNegations.TabIndex = 454
         Me.btnNegations.Text = "Negations"
         Me.btnNegations.UseVisualStyleBackColor = True
+        '
+        'btnDeliveryProof
+        '
+        Me.btnDeliveryProof.FlatAppearance.BorderColor = System.Drawing.Color.White
+        Me.btnDeliveryProof.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(CType(CType(8, Byte), Integer), CType(CType(98, Byte), Integer), CType(CType(170, Byte), Integer))
+        Me.btnDeliveryProof.FlatAppearance.MouseOverBackColor = System.Drawing.Color.Silver
+        Me.btnDeliveryProof.FlatStyle = System.Windows.Forms.FlatStyle.Flat
+        Me.btnDeliveryProof.Font = New System.Drawing.Font("Tahoma", 10.0!)
+        Me.btnDeliveryProof.ForeColor = System.Drawing.Color.FromArgb(CType(CType(8, Byte), Integer), CType(CType(98, Byte), Integer), CType(CType(170, Byte), Integer))
+        Me.btnDeliveryProof.Image = CType(resources.GetObject("btnDeliveryProof.Image"), System.Drawing.Image)
+        Me.btnDeliveryProof.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft
+        Me.btnDeliveryProof.Location = New System.Drawing.Point(705, 5)
+        Me.btnDeliveryProof.Name = "btnDeliveryProof"
+        Me.btnDeliveryProof.Padding = New System.Windows.Forms.Padding(0, 0, 5, 0)
+        Me.btnDeliveryProof.Size = New System.Drawing.Size(167, 51)
+        Me.btnDeliveryProof.TabIndex = 455
+        Me.btnDeliveryProof.Text = "Delivery Proof"
+        Me.btnDeliveryProof.TextAlign = System.Drawing.ContentAlignment.MiddleRight
+        Me.btnDeliveryProof.UseVisualStyleBackColor = True
         '
         'btnUserPrivilege
         '
@@ -191,4 +212,5 @@ Partial Class frmDashboard
     Friend WithEvents btnMissingItems As Windows.Forms.Button
     Friend WithEvents btnUserPrivilege As Windows.Forms.Button
     Friend WithEvents btnNegations As Windows.Forms.Button
+    Friend WithEvents btnDeliveryProof As Windows.Forms.Button
 End Class

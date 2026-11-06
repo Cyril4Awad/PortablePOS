@@ -64,6 +64,16 @@ export const STEPS = [
         needCashRegister: false
     },
     {
+        recKey: 'C4',
+        type: 'MI',
+        stackScreen: 'DeliveryProof',
+        title: 'Delivery Proof',
+        description: 'Proof of delivery with remark, photo and location',
+        imageSource: require('../../assets/icons/deliveryProof.png'),
+        menuActive: true,
+        needCashRegister: false
+    },
+    {
         recKey: 'S',
         type: 'MH',
         title: 'STOCK',

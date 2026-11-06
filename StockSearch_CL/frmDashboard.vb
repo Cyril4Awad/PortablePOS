@@ -4,6 +4,7 @@
     Private cntMI As cntMissingItems
     Private cntUP As cntUserPrivilege
     Private cntNG As cntNegations
+    Private cntDP As cntDeliveryProof
 
     Private Sub btnSettings_Click(sender As Object, e As EventArgs)
         Try
@@ -14,7 +15,7 @@
         End Try
     End Sub
 
-    Private Sub btn_Click(sender As Object, e As EventArgs) Handles btnPotentialClients.Click, btnMissingItems.Click, btnUserPrivilege.Click, btnNegations.Click
+    Private Sub btn_Click(sender As Object, e As EventArgs) Handles btnPotentialClients.Click, btnMissingItems.Click, btnUserPrivilege.Click, btnNegations.Click, btnDeliveryProof.Click
         Try
 
             If sender Is btnPotentialClients Then
@@ -96,6 +97,26 @@
                 End If
 
                 cntNG.BringToFront()
+
+            ElseIf sender Is btnDeliveryProof Then
+
+                If cntDP Is Nothing Then
+
+                    cntDP = New cntDeliveryProof
+
+                    cntDP.Anchor = Windows.Forms.AnchorStyles.Bottom Or
+                                   Windows.Forms.AnchorStyles.Left Or
+                                   Windows.Forms.AnchorStyles.Right Or
+                                   Windows.Forms.AnchorStyles.Top
+
+                    cntDP.Size = pnlContainer.Size
+                    cntDP.Location = pnlContainer.Location
+
+                    Me.Controls.Add(cntDP)
+
+                End If
+
+                cntDP.BringToFront()
 
             End If
 

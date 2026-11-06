@@ -48,10 +48,11 @@ const requestLocationPermission = async () => {
 
   var savedPosition = false;
 
-  const GetLocation = (force = false) => {
+  // alwaysOn : read the GPS even when UseLocation (AppConfig) is false, for the screens where the location is mandatory (Delivery Proof)
+  const GetLocation = (force = false, alwaysOn = false) => {
     return new Promise((resolve, reject) => {
 
-      if (!UseLocation) {
+      if (!UseLocation && !alwaysOn) {
         resolve(null);
         return;
       }

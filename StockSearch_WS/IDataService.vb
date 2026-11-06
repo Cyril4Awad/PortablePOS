@@ -165,6 +165,11 @@ Public Interface IDataService
     <OperationContract>
     <FaultContract(GetType(String))>
     <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
+    Function SaveDeliveryProof(clientRecID As String, remarks As String, photoBase64 As String, latitude As Double, longitude As Double, accuracy As Double, radiusInMeters As Double, userCode As String) As String
+
+    <OperationContract>
+    <FaultContract(GetType(String))>
+    <WebInvoke(Method:="POST", BodyStyle:=WebMessageBodyStyle.Wrapped, ResponseFormat:=WebMessageFormat.Json)>
     Function SaveOrder(isReturn As Boolean, clientRecID As String, orderVatType As String, orderDetails As Object, orderHeaderRemark As String, orderFooterRemark As String, orderCurrency As String, orderTotal As String, orderTotalVAT As String, orderDiscrepancy As Boolean, userCode As String) As String
 
     <OperationContract>
