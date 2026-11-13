@@ -1,13 +1,18 @@
 DEPLOYMENT GUIDE - Portable POS
 
 --- BEFORE YOU GO: INSTALLERS ---
-Put these files in the Installers folder before going to the client:
-- CRRuntime_64bit_13_0_12.msi   (SAP Crystal Reports runtime for .NET, 64-bit, version 13.0.12)
-- The BarTender 2016 R8 installer (64-bit), and the client's BarTender license key code
-  (only if the client uses Print Label)
-The license must be for the Automation edition or higher (Automation, Enterprise Automation).
-Basic and Professional editions do not work with the web service.
+Take these from the Installers folder:
+- BarTender Enterprise Automation 2016 R8 (11.0.8.3153) 64-bit setup (Setup_x64...exe)
+  Only if the client uses Print Label. It installs BarTender Designer, the print engine and the SDK the web service uses.
+- CRRuntime_64bit_13_0_12.msi (SAP Crystal Reports runtime for .NET, 64-bit, version 13.0.12)
+  Only if the client uses Reprint Documents. Free download from SAP if it is not in the folder.
 Note: CRRuntime_32bit_13_0_12.msi is NOT for the web service. The web service runs 64-bit.
+
+BarTender license:
+- Without a license key, BarTender runs as a 30-day trial (Enterprise Automation Demo). Print Label works during the trial.
+- When the trial expires, Print Label stops working (Preview: "Could not find file C:\Windows\Temp\Label_...").
+- Reinstalling does not reset the trial. Get the client's license key (Automation or Enterprise Automation edition)
+  before the trial ends. Basic and Professional editions do not work with the web service.
 
 --- SERVER: DATABASE ---
 1. Open SQL Server Management Studio and connect to the client's ERP database.
@@ -24,7 +29,7 @@ Note: CRRuntime_32bit_13_0_12.msi is NOT for the web service. The web service ru
 10. Turn on .NET Framework 4.x > WCF Services > HTTP Activation.
 11. Click OK and wait for Windows to finish. Restart if asked.
 
---- SERVER: CRYSTAL REPORTS RUNTIME (needed for Reprint Documents) ---
+--- SERVER: CRYSTAL REPORTS RUNTIME (only if the client uses Reprint Documents) ---
 12. Copy CRRuntime_64bit_13_0_12.msi from the Installers folder to the server.
 13. Right-click it and choose Install (log in as an administrator).
 14. Accept the license and click Next until it finishes. Keep the default options.
@@ -32,20 +37,26 @@ Note: CRRuntime_32bit_13_0_12.msi is NOT for the web service. The web service ru
     "SAP Crystal Reports runtime engine for .NET Framework (64-bit)" version 13.0.12.
 
 --- SERVER: BARTENDER (only if the client uses Print Label) ---
-16. Copy the BarTender 2016 R8 installer to the server.
+16. Copy the BarTender setup (Setup_x64...exe) from the Installers folder to the server
+    (Remote Desktop copy/paste, USB, or a shared folder).
 17. Right-click it and choose Run as administrator.
 18. Accept the license and choose the normal BarTender installation (not "Print Station only").
-19. Keep the default install folder: C:\Program Files\Seagull\BarTender Suite
-    (it must be "Program Files", NOT "Program Files (x86)", the web service needs the 64-bit BarTender).
+19. Keep the default install folder: C:\Program Files\Seagull\BarTender Suite (the setup creates the Seagull folder).
+    It must be "Program Files", NOT "Program Files (x86)": the web service needs the 64-bit BarTender.
 20. If the setup asks about the BarTender System Database, keep the default and click Next.
-21. When the installation finishes, the Activation Wizard opens (if not, open
-    C:\Program Files\Seagull\BarTender Suite\ActivationWizard.exe).
-22. Enter the client's Product Key Code and activate (online, or by phone/email if the server has no internet).
-23. Open BarTender once and check Help > About shows "2016 R8" and the edition is Automation or higher.
-24. Check that this file exists:
-    C:\Program Files\Seagull\BarTender Suite\SDK\Assemblies\Seagull.BarTender.Print.dll
-25. Open one of the client's label designs (.btw) in BarTender and print a test label to make sure the design opens.
+21. When the installation finishes, open BarTender once as administrator. The Activation Wizard opens
+    (if not, open C:\Program Files\Seagull\BarTender Suite\ActivationWizard.exe).
+22. If you have the client's license key: enter it and activate (online, or by phone/email if the server has no internet).
+    If not: choose the trial (30 days, see "BarTender license" at the top), and activate with the key later from
+    Help > Activate BarTender. Nothing else needs to change when the key is entered.
+23. Check Help > About:
+    Program 2016 R8, Version 11.0.8.3153 (64-bit), License Enterprise Automation (or Automation),
+    and either Activation Status "Activated" or trial days remaining (not "Expired").
+24. Check that BarTender registered the SDK for the web service. In PowerShell on the server, this must return True:
+    Test-Path "C:\Windows\Microsoft.NET\assembly\GAC_64\Seagull.BarTender.Print\v4.0_11.0.8.1__109ff779a1b4cbc7\Seagull.BarTender.Print.dll"
+25. Open one of the client's label designs (.btw) in BarTender to make sure it opens, then close BarTender.
     If BarTender is a version other than 2016 R8, stop and tell the developer (Web.config needs a change).
+    Do not copy any Seagull DLL into the web service bin folder.
 
 --- SERVER: WINDOWS USER FOR THE WEB SERVICE ---
 The web service runs as its own Windows user so BarTender and Crystal can read the label designs and reports.
@@ -123,5 +134,9 @@ The service page shows "Could not load file or assembly 'Seagull.BarTender.Print
   - Delete Seagull.BarTender.Print.dll from the web service bin folder on the server and run iisreset.
 Reprint Documents fails with a CrystalDecisions error
   - The 64-bit Crystal runtime is missing (steps 12-15).
+Print Label Preview says "Could not find file C:\Windows\Temp\Label_..."
+  - BarTender did not make the label image. Open BarTender > Help > About (step 23):
+    "Expired" / "Not Activated" -> enter the license key (step 22).
+  - If BarTender is activated: the app pool does not run as the POS user (step 38) or "Load User Profile" is not True (step 39).
 Print Label says the design cannot be opened / access denied
   - The POS user has no access to the label designs folder (step 29), or BarTender is not activated (step 22).
