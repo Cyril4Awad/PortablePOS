@@ -6318,7 +6318,7 @@ Public Class DataService
             Return "Success"
 
         Catch ex As Exception
-            Return "Error " & ex.Message
+            Return "Error " & LabelErrorMessage(ex)
         End Try
 
     End Function
@@ -6335,7 +6335,7 @@ Public Class DataService
             Return Convert.ToBase64String(ClsBartender.PreviewLabel(designPath, labelItem))
 
         Catch ex As Exception
-            Return "Error " & ex.Message
+            Return "Error " & LabelErrorMessage(ex)
         End Try
 
     End Function
@@ -6358,8 +6358,21 @@ Public Class DataService
             Return Convert.ToBase64String(ClsBartender.CpclLabel(designPath, labelItem, qty, offsetXDots))
 
         Catch ex As Exception
-            Return "Error " & ex.Message
+            Return "Error " & LabelErrorMessage(ex)
         End Try
+
+    End Function
+
+    'BarTender is not copied with the web service (it is loaded from the server's BarTender installation), so a server
+    'without BarTender, or with a 32-bit application pool, only fails here and the rest of the service still works
+    Private Function LabelErrorMessage(ex As Exception) As String
+
+        If (TypeOf ex Is IO.FileNotFoundException OrElse TypeOf ex Is IO.FileLoadException OrElse TypeOf ex Is BadImageFormatException) _
+            AndAlso ex.Message.IndexOf("Seagull", StringComparison.OrdinalIgnoreCase) >= 0 Then
+            Return "BarTender 2016 R8 (64-bit) Is Not Installed On The Server, Or The Web Service Application Pool Is Not 64-bit"
+        End If
+
+        Return ex.Message
 
     End Function
 

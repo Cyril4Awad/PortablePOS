@@ -60,3 +60,8 @@ Desktop.ini
 
 # Server installers (large binaries, kept locally only)
 Installers/
+
+# Installers too large for git (keep them on the shared drive)
+*.rar
+Installers/*.exe
+Installers/*.msi
