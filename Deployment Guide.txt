@@ -1,5 +1,19 @@
 DEPLOYMENT GUIDE - Portable POS
 
+--- BEFORE YOU GO: INSTALLERS ---
+Take these from the Installers folder:
+- BarTender Enterprise Automation 2016 R8 (11.0.8.3153) 64-bit setup (Setup_x64...exe)
+  Only if the client uses Print Label. It installs BarTender Designer, the print engine and the SDK the web service uses.
+- CRRuntime_64bit_13_0_12.msi (SAP Crystal Reports runtime for .NET, 64-bit, version 13.0.12)
+  Only if the client uses Reprint Documents. Free download from SAP if it is not in the folder.
+Note: CRRuntime_32bit_13_0_12.msi is NOT for the web service. The web service runs 64-bit.
+
+BarTender license:
+- Without a license key, BarTender runs as a 30-day trial (Enterprise Automation Demo). Print Label works during the trial.
+- When the trial expires, Print Label stops working (Preview: "Could not find file C:\Windows\Temp\Label_...").
+- Reinstalling does not reset the trial. Get the client's license key (Automation or Enterprise Automation edition)
+  before the trial ends. Basic and Professional editions do not work with the web service.
+
 --- SERVER: DATABASE ---
 1. Open SQL Server Management Studio and connect to the client's ERP database.
 2. Run every script in the folder Scripts\Backoffice\Tables in number order.
@@ -8,51 +22,121 @@ DEPLOYMENT GUIDE - Portable POS
 5. Run every script in the folder Scripts\Backoffice\Procedures in number order.
 6. Do not run anything from the folder "StandAlone - Not Used".
 
+--- SERVER: WINDOWS FEATURES ---
+7. On the server, open "Turn Windows features on or off" (on Windows Server: Server Manager > Add Roles and Features).
+8. Turn on Internet Information Services (IIS) with IIS Management Console.
+9. Turn on .NET Framework 4.x > ASP.NET 4.x.
+10. Turn on .NET Framework 4.x > WCF Services > HTTP Activation.
+11. Click OK and wait for Windows to finish. Restart if asked.
+
+--- SERVER: CRYSTAL REPORTS RUNTIME (only if the client uses Reprint Documents) ---
+12. Copy CRRuntime_64bit_13_0_12.msi from the Installers folder to the server.
+13. Right-click it and choose Install (log in as an administrator).
+14. Accept the license and click Next until it finishes. Keep the default options.
+15. Check: Control Panel > Programs and Features shows
+    "SAP Crystal Reports runtime engine for .NET Framework (64-bit)" version 13.0.12.
+
+--- SERVER: BARTENDER (only if the client uses Print Label) ---
+16. Copy the BarTender setup (Setup_x64...exe) from the Installers folder to the server
+    (Remote Desktop copy/paste, USB, or a shared folder).
+17. Right-click it and choose Run as administrator.
+18. Accept the license and choose the normal BarTender installation (not "Print Station only").
+19. Keep the default install folder: C:\Program Files\Seagull\BarTender Suite (the setup creates the Seagull folder).
+    It must be "Program Files", NOT "Program Files (x86)": the web service needs the 64-bit BarTender.
+20. If the setup asks about the BarTender System Database, keep the default and click Next.
+21. When the installation finishes, open BarTender once as administrator. The Activation Wizard opens
+    (if not, open C:\Program Files\Seagull\BarTender Suite\ActivationWizard.exe).
+22. If you have the client's license key: enter it and activate (online, or by phone/email if the server has no internet).
+    If not: choose the trial (30 days, see "BarTender license" at the top), and activate with the key later from
+    Help > Activate BarTender. Nothing else needs to change when the key is entered.
+23. Check Help > About:
+    Program 2016 R8, Version 11.0.8.3153 (64-bit), License Enterprise Automation (or Automation),
+    and either Activation Status "Activated" or trial days remaining (not "Expired").
+24. Check that BarTender registered the SDK for the web service. In PowerShell on the server, this must return True:
+    Test-Path "C:\Windows\Microsoft.NET\assembly\GAC_64\Seagull.BarTender.Print\v4.0_11.0.8.1__109ff779a1b4cbc7\Seagull.BarTender.Print.dll"
+25. Open one of the client's label designs (.btw) in BarTender to make sure it opens, then close BarTender.
+    If BarTender is a version other than 2016 R8, stop and tell the developer (Web.config needs a change).
+    Do not copy any Seagull DLL into the web service bin folder.
+
+--- SERVER: WINDOWS USER FOR THE WEB SERVICE ---
+The web service runs as its own Windows user so BarTender and Crystal can read the label designs and reports.
+26. Open Computer Management > Local Users and Groups > Users (or ask the client's IT for a domain user
+    if the label designs or reports are on another PC).
+27. Create a user, for example POS, with a strong password.
+28. Untick "User must change password at next logon" and tick "Password never expires".
+29. Give that user Read access to the label designs folder (the folder in tbl_LabelDesigns,
+    CLD_TemplateFolder / CLD_Document).
+30. Give that user Read access to the ERP Crystal reports folder (the ReportsFolder in Web.config).
+
 --- SERVER: WEB SERVICE ---
-7. On the server, open "Turn Windows features on or off".
-8. Turn on Internet Information Services (IIS).
-9. Turn on ASP.NET 4.x and WCF Services > HTTP Activation.
-10. Install the Crystal Reports runtime on the server (needed for Reprint Documents). From the Installers folder.
-11. Install BarTender on the server if the client will use Print Label. From the Installers folder.
-12. Copy the published web service folder to the server (for example C:\inetpub\wwwroot\PortablePOS_WS).
-13. Open IIS Manager.
-14. Right-click Default Web Site and choose Add Application.
-15. Set the alias to exactly PortablePOS_WS.
-16. Set the physical path to the folder you copied.
-17. Choose an application pool that runs .NET CLR v4.0.
-18. Open Web.config in the web service folder.
-19. Set AppConnectionString to the encrypted connection string of the client's database.
-20. Set CompCode to the client's company code.
-21. Set LocCode to the client's location code.
-22. Set ReportsFolder to the folder on the server that holds the ERP Crystal reports.
-23. Set LabelPrinterName and LabelOffsetXMM if the client uses Print Label.
-24. Save Web.config.
-25. Open Windows Firewall on the server and allow incoming connections on port 80.
-26. On the server, open a browser at http://localhost/PortablePOS_WS/DataService.svc and check that the service page appears.
+31. Copy the published web service folder to the server (for example C:\inetpub\wwwroot\PortablePOS_WS).
+32. Give the POS user Read & execute access on that folder.
+33. Open IIS Manager.
+34. Click Application Pools > Add Application Pool.
+35. Name: PortablePOS_WS, .NET CLR version: v4.0, Managed pipeline mode: Integrated. Click OK.
+36. Select the new pool and click Advanced Settings.
+37. Set "Enable 32-Bit Applications" to False. (IMPORTANT: True makes Print Label and Reprint Documents fail, see Troubleshooting.)
+38. Set Identity: click "...", choose Custom account, click Set and enter the POS user and password.
+39. Set "Load User Profile" to True. Click OK.
+40. Right-click Default Web Site and choose Add Application.
+41. Set the alias to exactly PortablePOS_WS.
+42. Set the application pool to PortablePOS_WS (the one you just created).
+43. Set the physical path to the folder you copied. Click OK.
+44. Open Web.config in the web service folder.
+45. Set AppConnectionString to the encrypted connection string of the client's database.
+46. Set CompCode to the client's company code.
+47. Set LocCode to the client's location code.
+48. Set ReportsFolder to the folder on the server that holds the ERP Crystal reports.
+49. Set LabelPrinterName and LabelOffsetXMM if the client uses Print Label.
+50. Save Web.config.
+51. Open a Command Prompt as administrator and run: iisreset
+52. Open Windows Firewall on the server and allow incoming connections on port 80.
+53. On the server, open a browser at http://localhost/PortablePOS_WS/DataService.svc and check that the service page appears.
+54. From another PC or the portable's browser, open http://<server IP>/PortablePOS_WS/DataService.svc and check the same page appears.
+    If it works on the server but not here: check the firewall and that both are on the same network.
 
 --- PORTABLE DEVICE ---
-27. Connect the portable to the same network (Wi-Fi) as the server.
-28. On the portable, open Settings > About phone and write down the Device name.
-29. In SQL, open the script Tables\008-CREATE TABLE [dbo].[tbl_CPP_Devices].sql.
-30. Put the device name in @DeviceName and run the script.
-31. Copy the APK file to the portable.
-32. Open the APK on the portable and allow installing from unknown sources if asked.
-33. Install the app.
-34. Open the app.
-35. On the login screen, press the server button and enter the server IP address.
-36. Press Register Device.
-37. Allow the permissions the app asks for (Bluetooth / Nearby devices, camera, location).
+55. Connect the portable to the same network (Wi-Fi) as the server.
+56. On the portable, open Settings > About phone and write down the Device name.
+57. In SQL, open the script Tables\008-CREATE TABLE [dbo].[tbl_CPP_Devices].sql.
+58. Put the device name in @DeviceName and run the script.
+59. Copy the APK file to the portable.
+60. Open the APK on the portable and allow installing from unknown sources if asked.
+61. Install the app.
+62. Open the app.
+63. On the login screen, press the server button and enter the server IP address.
+64. Press Register Device.
+65. Allow the permissions the app asks for (Bluetooth / Nearby devices, camera, location).
 
 --- USER ACCESS ---
-38. In the ERP, open the Portable POS Dashboard.
-39. Open the User Privilege tab.
-40. Choose the user.
-41. Tick the menu items that user is allowed to open on the portable.
-42. Set a Clear Date if the access should expire, or leave it empty for unlimited access.
-43. Save.
-44. Open the Negations tab if the user needs extra count actions (Show Available Qty, List Differences), then tick them for that user and company and save.
+66. In the ERP, open the Portable POS Dashboard.
+67. Open the User Privilege tab.
+68. Choose the user.
+69. Tick the menu items that user is allowed to open on the portable.
+70. Set a Clear Date if the access should expire, or leave it empty for unlimited access.
+71. Save.
+72. Open the Negations tab if the user needs extra count actions (Show Available Qty, List Differences), then tick them for that user and company and save.
 
 --- TEST ---
-45. On the portable, log in with the user's ERP code and password.
-46. Check that the menu shows only the items you allowed for that user.
-47. Check that the footer shows Online.
+73. On the portable, log in with the user's ERP code and password.
+74. Check that the menu shows only the items you allowed for that user.
+75. Check that the footer shows Online.
+76. If the client uses Print Label: pair the label printer, open Print Label, scan an item and print.
+77. If the client uses Reprint Documents: reprint one document and check the PDF opens.
+
+--- TROUBLESHOOTING ---
+The web service does not include BarTender: it uses the BarTender installed on the server. A client that does not
+use Print Label does not need BarTender, and the portable works normally without it.
+Print Label says "BarTender 2016 R8 (64-bit) Is Not Installed On The Server, Or The Web Service Application Pool Is Not 64-bit"
+  - Install BarTender 2016 R8 64-bit (steps 16-25), set "Enable 32-Bit Applications" to False (step 37) and run iisreset.
+  - If a version other than 2016 R8 is installed, tell the developer (Web.config needs a change).
+The service page shows "Could not load file or assembly 'Seagull.BarTender.Print'" (old web service versions only)
+  - Delete Seagull.BarTender.Print.dll from the web service bin folder on the server and run iisreset.
+Reprint Documents fails with a CrystalDecisions error
+  - The 64-bit Crystal runtime is missing (steps 12-15).
+Print Label Preview says "Could not find file C:\Windows\Temp\Label_..."
+  - BarTender did not make the label image. Open BarTender > Help > About (step 23):
+    "Expired" / "Not Activated" -> enter the license key (step 22).
+  - If BarTender is activated: the app pool does not run as the POS user (step 38) or "Load User Profile" is not True (step 39).
+Print Label says the design cannot be opened / access denied
+  - The POS user has no access to the label designs folder (step 29), or BarTender is not activated (step 22).
