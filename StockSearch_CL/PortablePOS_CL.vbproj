@@ -40,7 +40,7 @@
     <OptionExplicit>On</OptionExplicit>
   </PropertyGroup>
   <PropertyGroup>
-    <OptionCompare>Text</OptionCompare>
+    <OptionCompare>Binary</OptionCompare>
   </PropertyGroup>
   <PropertyGroup>
     <OptionStrict>Off</OptionStrict>
@@ -63,7 +63,7 @@
     </Reference>
     <Reference Include="ApplicationsDesign, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Users\cyril.awad\source\Workspaces\Workspace\ApplicationsDesign.dll</HintPath>
+      <HintPath>DLL\ApplicationsDesign.dll</HintPath>
     </Reference>
     <Reference Include="DevComponents.DotNetBar2, Version=12.2.0.0, Culture=neutral, PublicKeyToken=7eb7c3a35b91de04, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
