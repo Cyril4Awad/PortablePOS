@@ -1050,6 +1050,86 @@ Public Class DataService
 
 #End Region
 
+#Region "Delivery Proof"
+
+    'Clients > Delivery Proof : one row in tbl_CPP_DeliveryProof (client, remark, optional photo, geo location of the device)
+    'photoBase64 : the jpg taken on the device, '' when no photo
+    Public Function SaveDeliveryProof(clientRecID As String, remarks As String, photoBase64 As String, latitude As Double, longitude As Double, accuracy As Double, radiusInMeters As Double, userCode As String) As String Implements IDataService.SaveDeliveryProof
+
+        Try
+
+            Dim clRecID As Decimal
+            If Not Decimal.TryParse(If(clientRecID, "").Trim, clRecID) OrElse clRecID <= 0 Then Return "Client is Mandatory"
+            If If(remarks, "").Trim = "" Then Return "Remark is Mandatory"
+            If latitude < -90 OrElse latitude > 90 OrElse longitude < -180 OrElse longitude > 180 OrElse (latitude = -1 AndAlso longitude = -1) Then Return "Geo Location is Mandatory"
+
+            Dim photo As Byte() = Nothing
+            If If(photoBase64, "").Trim <> "" Then
+                Try
+                    photo = Convert.FromBase64String(photoBase64.Trim)
+                Catch exPhoto As FormatException
+                    Return "The photo could not be read, please take it again"
+                End Try
+            End If
+
+            Using cnsql As New SqlConnection(DecryptString(ServerSent.lcConSql, DecPS("REDACTED")))
+
+                Dim trnSql As SqlTransaction = Nothing
+                Try
+
+                    cnsql.Open()
+                    trnSql = cnsql.BeginTransaction
+
+                    Using cmsql As New SqlCommand(" ", cnsql, trnSql)
+
+                        cmsql.CommandTimeout = 900
+
+                        cmsql.CommandText = " SELECT ISNULL(MAX(DP_RecID),0) + 1 FROM tbl_CPP_DeliveryProof WITH (TABLOCKX) WHERE DP_LocCode = @LocCode "
+                        cmsql.Parameters.AddWithValue("@LocCode", LocCode)
+                        Dim recID As Decimal = CDec(cmsql.ExecuteScalar)
+
+                        cmsql.CommandText = " INSERT INTO dbo.tbl_CPP_DeliveryProof
+                                                     ( DP_LocCode , DP_RecID , DP_CLRecID , DP_Remarks , DP_Photo ,
+                                                       DP_Coordinates , DP_Accuracy , DP_RadiusInMeters , DP_UserStamp , DP_DateStamp )
+                                              VALUES ( @LocCode , @RecID , @CLRecID , @Remarks , @Photo ,
+                                                       geography::Point(@Latitude, @Longitude, 4326) , @Accuracy , @RadiusInMeters , @UserCode , GETDATE() ) "
+                        cmsql.Parameters.AddWithValue("@RecID", recID)
+                        cmsql.Parameters.AddWithValue("@CLRecID", clRecID)
+                        cmsql.Parameters.Add("@Remarks", SqlDbType.NVarChar, -1).Value = remarks.Trim
+                        cmsql.Parameters.Add("@Photo", SqlDbType.VarBinary, -1).Value = If(photo Is Nothing, CObj(DBNull.Value), photo)
+                        cmsql.Parameters.Add("@Latitude", SqlDbType.Float).Value = latitude
+                        cmsql.Parameters.Add("@Longitude", SqlDbType.Float).Value = longitude
+                        cmsql.Parameters.Add("@Accuracy", SqlDbType.Decimal).Value = Math.Round(CDec(accuracy), 2)
+                        cmsql.Parameters("@Accuracy").Precision = 18
+                        cmsql.Parameters("@Accuracy").Scale = 2
+                        cmsql.Parameters.AddWithValue("@RadiusInMeters", Math.Round(CDec(radiusInMeters)))
+                        cmsql.Parameters.Add("@UserCode", SqlDbType.VarChar, 4).Value = Left(If(userCode, ""), 4)
+                        cmsql.ExecuteNonQuery()
+
+                    End Using
+
+                    trnSql.Commit()
+
+                Catch exsv As Exception
+                    Try
+                        If trnSql IsNot Nothing Then trnSql.Rollback()
+                    Catch exTRN As Exception
+                    End Try
+                    Throw
+                End Try
+
+            End Using
+
+            Return "Success"
+
+        Catch ex As Exception
+            Return "Error" & ex.Message
+        End Try
+
+    End Function
+
+#End Region
+
 #Region "Stock Items"
 
     'searchFor = RO : the product groups of the items a Receiving Order can receive (V_CPP_ROItems, the privileges of userCode)

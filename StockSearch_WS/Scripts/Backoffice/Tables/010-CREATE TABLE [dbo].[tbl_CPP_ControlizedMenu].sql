@@ -28,6 +28,7 @@ MERGE dbo.tbl_CPP_ControlizedMenu AS t
 USING ( VALUES ( 'C1', N'Clients View', 1 ),
                ( 'C2', N'Clients Visits', 1 ),
                ( 'C3', N'Potential Clients', 1 ),
+               ( 'C4', N'Delivery Proof', 1 ),
                ( 'S1', N'Stock Search', 1 ),
                ( 'S2', N'Missing Items', 1 ),
                ( 'T1', N'Prepare Sales Orders', 1 ),

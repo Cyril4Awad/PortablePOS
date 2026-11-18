@@ -463,7 +463,47 @@ const SavePotentialClient = (
 
 };
 
+// Clients > Delivery Proof : resolves 'Success' or the message to show
+// photoBase64 : the jpg taken on the device, '' when no photo
+const SaveDeliveryProof = (
+    clientRecID,
+    remarks,
+    photoBase64,
+    latitude,
+    longitude,
+    accuracy,
+    radiusInMeters
+    ) => {
+
+    return ServerInfo.serverURL().then((serverURL) =>
+        fetch(serverURL + 'SaveDeliveryProof',
+            {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    token : DeviceInfo.getDeviceNameSync() + "|" + DeviceInfo.getDeviceId() + "_" + DeviceInfo.getUniqueIdSync()
+                },
+                body: JSON.stringify({
+                    clientRecID: clientRecID,
+                    remarks: remarks,
+                    photoBase64: photoBase64,
+                    latitude: latitude,
+                    longitude: longitude,
+                    accuracy: accuracy,
+                    radiusInMeters: radiusInMeters,
+                    userCode: getLoginUserCode()
+                })
+            },
+        )
+            .then(response => response.json())
+            .then(results => results.SaveDeliveryProofResult)
+    );
+
+};
+
 export default {
+    SaveDeliveryProof: SaveDeliveryProof,
     GetClientGroups: GetClientGroups,
     GetClients: GetClients,
     GetClientLastPurchases: GetClientLastPurchases,

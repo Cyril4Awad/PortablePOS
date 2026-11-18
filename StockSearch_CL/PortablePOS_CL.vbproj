@@ -16,6 +16,7 @@
     <SccLocalPath>SAK</SccLocalPath>
     <SccAuxPath>SAK</SccAuxPath>
     <SccProvider>SAK</SccProvider>
+    <TargetFrameworkProfile />
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -62,7 +63,7 @@
     </Reference>
     <Reference Include="ApplicationsDesign, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\SimpleTest\ApplicationsDesign.dll</HintPath>
+      <HintPath>DLL\ApplicationsDesign.dll</HintPath>
     </Reference>
     <Reference Include="DevComponents.DotNetBar2, Version=12.2.0.0, Culture=neutral, PublicKeyToken=7eb7c3a35b91de04, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
@@ -138,6 +139,12 @@
     <Compile Include="UserControls\frmDuplicatePrivilege.vb">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UserControls\cntDeliveryProof.Designer.vb">
+      <DependentUpon>cntDeliveryProof.vb</DependentUpon>
+    </Compile>
+    <Compile Include="UserControls\cntDeliveryProof.vb">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="UserControls\cntNegations.Designer.vb">
       <DependentUpon>cntNegations.vb</DependentUpon>
     </Compile>
@@ -185,6 +192,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="UserControls\cntMissingItems.resx">
       <DependentUpon>cntMissingItems.vb</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UserControls\cntDeliveryProof.resx">
+      <DependentUpon>cntDeliveryProof.vb</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="UserControls\cntNegations.resx">
       <DependentUpon>cntNegations.vb</DependentUpon>

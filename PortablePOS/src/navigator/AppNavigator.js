@@ -12,6 +12,7 @@ import {
 import HomeScreen from './../screens/HomeScreen';
 import ClientsScreen from './../screens/ClientsScreen';
 import PotentialClientsScreen from './../screens/PotentialClientsScreen';
+import DeliveryProofScreen from './../screens/DeliveryProofScreen';
 import ClientsVisitsScreen from '../screens/ClientsVisitsScreen';
 import StockSearchScreen from './../screens/StockSearchScreen';
 import MissingItemsScreen from '../screens/MissingItemsScreen';
@@ -80,6 +81,14 @@ const AppNavigator = (params) => {
                     options={{
                         title: 'Potential Clients',
                     }} />
+
+                <Stack.Screen
+                    name='DeliveryProof'
+                    component={DeliveryProofScreen}
+                    options={({ navigation }) => ({
+                        title: 'Delivery Proof',
+                        ...BackArrowOptions(navigation),
+                    })} />
 
                 <Stack.Screen
                     name='StockSearch'
